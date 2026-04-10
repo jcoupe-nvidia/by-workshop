@@ -41,7 +41,7 @@ Build a workshop-ready, notebook-centric MVP for late-order recovery on the NVID
 - For each skill, define purpose, inputs, outputs, and allowed tool sequences.
 - Keep skill transitions visible in the notebook so users can see when the agent is diagnosing, checking primary fulfillment, exploring alternates, and synthesizing a recommendation.
 
-## Phase 4: Implement Real Model Agent Loop
+## Phase 4: Implement Real Model Agent Loop ✅
 - Build the canonical tool-call schema and validation logic in `src/schema.py`.
 - Implement the OpenCode-style execution loop in `src/agent_loop.py`: prompt model, parse output, validate tool call, execute tool, append observation, continue with bounded iterations.
 - Keep model integration narrow: one adapter function or class that can call the chosen model endpoint while the rest of the stack remains deterministic and testable.
