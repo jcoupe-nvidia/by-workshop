@@ -10,7 +10,7 @@ Build a workshop-ready, notebook-centric MVP for late-order recovery on the NVID
 ## Fixed Constraints From The Spec
 - Keep the scenario centered on late order recovery for `SO-10482` with machine-checkable sequence dependencies from [CLAUDE.md](CLAUDE.md).
 - Target a typical successful run of `5-10` tool calls, `2-4` explicit skills, and `7-9` deterministic tools.
-- Explicitly cover the required stack references: NeMo Data Designer, NeMo RL, NVIDIA Megatron, NVIDIA ProRL, and OpenCode.
+- Explicitly cover the required stack references: NeMo RL, NVIDIA Megatron, NVIDIA ProRL, and OpenCode.
 
 ## Proposed Repo Shape
 - [notebooks/late_order_recovery_workshop.ipynb](notebooks/late_order_recovery_workshop.ipynb): the main pedagogical artifact and live demo flow.
@@ -58,7 +58,7 @@ Build a workshop-ready, notebook-centric MVP for late-order recovery on the NVID
 - Ensure at least one evaluator explicitly checks ordered dependencies such as inventory discovery before transfer ETA and candidate option generation before scoring.
 
 ## Phase 7: Training-Oriented Wrap-Up
-- Add notebook sections showing how traces, repair cases, and evaluator outputs could be authored or iterated in NeMo Data Designer.
+- Add notebook sections showing how traces, repair cases, and evaluator outputs could be curated locally and prepared for downstream export.
 - Add one concrete export or handoff example for NeMo RL and frame reward design using NVIDIA ProRL concepts.
 - Connect the trajectory and reward design discussion to NVIDIA Megatron and the target environment of `8 H100 GPUs`, but keep it conceptual rather than operational.
 - Capture NeMo Guardrails as a clearly labeled optional follow-up rather than core MVP scope.

@@ -9,6 +9,8 @@ Close the phase identified by: `$ARGUMENTS`
 Before finishing:
 - confirm the work is on the dedicated phase branch created for this phase, not on `main`
 - review the completed work against the phase goals in `PLAN.md`
+- update `PLAN.md` to reflect the latest completed phase status
+- update `PLAN.md` to identify the next phase that should be implemented
 - summarize what was completed, what changed, and which files were updated
 - identify any gaps, deviations, blockers, or follow-up items that remain
 - run the relevant validation or tests and report the results clearly
@@ -18,6 +20,7 @@ Before finishing:
 If the phase is not fully complete, explain exactly what remains.
 
 If the phase is complete:
+- ensure the `PLAN.md` update clearly marks this phase as completed and names the next phase to start
 - create a commit with a message that reflects the phase outcome
 - push the phase branch to GitHub
 - open a pull request from the phase branch into `main`
