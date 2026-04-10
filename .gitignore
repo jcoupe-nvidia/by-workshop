@@ -19,6 +19,9 @@ env/
 .vscode/
 .idea/
 
+# Generated artifacts
+artifacts/
+
 # OS
 .DS_Store
 Thumbs.db

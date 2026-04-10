@@ -21,6 +21,7 @@ Build a workshop-ready, notebook-centric MVP for late-order recovery on the NVID
 - [src/agent_loop.py](src/agent_loop.py): think/emit/validate/execute/observe loop, model adapter boundary, and trace capture.
 - [src/fallbacks.py](src/fallbacks.py): repair/reject parsing logic for malformed or mixed outputs.
 - [src/evaluation.py](src/evaluation.py): sequence-sensitive evaluators and simple scoring helpers.
+- [src/training_export.py](src/training_export.py): NeMo RL trajectory export, ProRL reward computation, and Megatron config sketch.
 - [README.md](README.md): concise repo entrypoint and how to run the notebook.
 - Optional later: [examples/](examples/) or [artifacts/](artifacts/) for saved traces and evaluator outputs if that improves workshop usability.
 
@@ -57,7 +58,7 @@ Build a workshop-ready, notebook-centric MVP for late-order recovery on the NVID
 - Implement evaluators in `src/evaluation.py` for skill selection quality, tool validity, tool accuracy, sequence correctness, task success, recovery quality, and efficiency.
 - Ensure at least one evaluator explicitly checks ordered dependencies such as inventory discovery before transfer ETA and candidate option generation before scoring.
 
-## Phase 7: Training-Oriented Wrap-Up ← next
+## Phase 7: Training-Oriented Wrap-Up ✅
 - Add notebook sections showing how traces, repair cases, and evaluator outputs could be curated locally and prepared for downstream export.
 - Add one concrete export or handoff example for NeMo RL and frame reward design using NVIDIA ProRL concepts.
 - Connect the trajectory and reward design discussion to NVIDIA Megatron and the target environment of `8 H100 GPUs`, but keep it conceptual rather than operational.
