@@ -30,7 +30,7 @@ Build a workshop-ready, notebook-centric MVP for late-order recovery on the NVID
 - Define the minimal helper-module boundaries so the notebook stays short and presentation-friendly.
 - Decide the real-model integration seam early: one thin adapter in `src/agent_loop.py`, with deterministic tool execution remaining local.
 
-## Phase 2: Build Synthetic Data And Deterministic Tools
+## Phase 2: Build Synthetic Data And Deterministic Tools ✅
 - Implement the small in-memory scenario dataset in `src/scenario_data.py`.
 - Implement `7-9` deterministic tools in `src/tools.py`, matching the spec closely: order lookup, shipment status, source inventory, alternate inventory, transfer ETA, supplier expedite, capacity, scoring, and final recommendation support.
 - Make tool outputs strongly structured so traces, validation, and evaluation are easy to inspect in notebook cells.
