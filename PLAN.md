@@ -36,7 +36,7 @@ Build a workshop-ready, notebook-centric MVP for late-order recovery on the NVID
 - Make tool outputs strongly structured so traces, validation, and evaluation are easy to inspect in notebook cells.
 - Encode sequence dependencies explicitly so invalid call orders can be detected rather than only implied.
 
-## Phase 3: Add Explicit Skills And Tool-Use Policy
+## Phase 3: Add Explicit Skills And Tool-Use Policy ✅
 - Implement `2-4` explicit skills in `src/skills.py`, likely the four suggested in [CLAUDE.md](CLAUDE.md) unless simplification is needed after prototyping.
 - For each skill, define purpose, inputs, outputs, and allowed tool sequences.
 - Keep skill transitions visible in the notebook so users can see when the agent is diagnosing, checking primary fulfillment, exploring alternates, and synthesizing a recommendation.
