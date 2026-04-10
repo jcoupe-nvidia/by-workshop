@@ -165,8 +165,6 @@ The notebook must define a canonical Nemotron-style tool-call format.
 
 These are hard requirements for the notebook design:
 
-- **NeMo Data Designer**
-  - for authoring and iterating on synthetic scenario data, traces, repair cases, and evaluation examples
 - **NeMo RL**
   - as the main training-oriented reference for exporting trajectories, rewards, and evaluator outputs
 - **NVIDIA Megatron**
