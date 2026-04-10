@@ -1,0 +1,10 @@
+name: by-workshop
+channels:
+  - defaults
+dependencies:
+  - python=3.12
+  - jupyter
+  - ipykernel
+  - pip
+  - pip:
+      - requests
