@@ -35,6 +35,12 @@ from src.schema import (
     check_dependencies,
 )
 from src.tools import TOOL_REGISTRY, TOOL_DEPENDENCIES
+from src.fallbacks import (
+    FallbackAction,
+    FallbackResult,
+    try_repair,
+    parse_with_fallback,
+)
 
 # -- Configuration ---------------------------------------------------------
 
@@ -56,6 +62,8 @@ class ToolCallRecord:
     result: dict[str, Any]
     valid: bool
     validation_error: str | None = None
+    fallback_action: str | None = None       # "repaired", "rejected", or None
+    repairs_applied: list[str] | None = None  # list of repair labels if repaired
 
 @dataclass
 class AgentTrace:
@@ -69,6 +77,8 @@ class AgentTrace:
     wall_time_seconds: float = 0.0
     model_calls: int = 0
     errors: list[str] = field(default_factory=list)
+    fallback_repairs: int = 0
+    fallback_rejects: int = 0
 
     @property
     def tool_names_called(self) -> list[str]:
@@ -248,6 +258,25 @@ def run_agent(
 
         # Step 2: Parse and validate the response
         result = validate_tool_call(raw_response, TOOL_REGISTRY)
+        fallback_result: FallbackResult | None = None
+
+        # Step 2b: If validation fails, attempt fallback repair
+        if isinstance(result, ValidationError):
+            fb = try_repair(raw_response, TOOL_REGISTRY)
+
+            if fb.action == FallbackAction.REPAIRED and fb.repaired:
+                # Re-validate the repaired output
+                result = validate_tool_call(fb.repaired, TOOL_REGISTRY)
+                fallback_result = fb
+                trace.fallback_repairs += 1
+                if verbose:
+                    print(f"  -> Fallback REPAIRED: {fb.repairs_applied}")
+            elif fb.action == FallbackAction.REJECTED:
+                fallback_result = fb
+                trace.fallback_rejects += 1
+                if verbose:
+                    print(f"  -> Fallback REJECTED: {fb.rejection_reason}")
+            # If NO_ACTION, the original validation error stands
 
         # Step 3a: Final answer -- stop the loop
         if isinstance(result, ParsedFinalAnswer):
@@ -259,10 +288,13 @@ def run_agent(
                 print(f"  -> Final answer: {json.dumps(result.answer, indent=2)}")
             break
 
-        # Step 3b: Validation error -- tell the model and continue
+        # Step 3b: Validation error (after fallback attempt) -- tell the model and continue
         if isinstance(result, ValidationError):
             error_msg = f"Validation error ({result.error_type}): {result.message}"
             trace.errors.append(error_msg)
+
+            fb_action = fallback_result.action.value if fallback_result else None
+            fb_repairs = fallback_result.repairs_applied if fallback_result else None
 
             # Record the failed step
             trace.steps.append(ToolCallRecord(
@@ -273,6 +305,8 @@ def run_agent(
                 result={"error": result.message},
                 valid=False,
                 validation_error=result.message,
+                fallback_action=fb_action,
+                repairs_applied=fb_repairs,
             ))
 
             # Feed the error back to the model so it can correct itself
@@ -334,7 +368,9 @@ def run_agent(
             tool_result = {"error": f"Tool execution failed: {e}"}
             trace.errors.append(str(e))
 
-        # Record the successful step
+        # Record the successful step (include fallback info if repaired)
+        fb_action = fallback_result.action.value if fallback_result else None
+        fb_repairs = fallback_result.repairs_applied if fallback_result else None
         trace.steps.append(ToolCallRecord(
             iteration=iteration,
             thought=result.thought,
@@ -342,6 +378,8 @@ def run_agent(
             arguments=result.arguments,
             result=tool_result,
             valid=True,
+            fallback_action=fb_action,
+            repairs_applied=fb_repairs,
         ))
 
         if verbose:
@@ -372,6 +410,8 @@ def run_agent(
         print(f"    Tool calls:      {trace.total_tool_calls}")
         print(f"    Model calls:     {trace.model_calls}")
         print(f"    Errors:          {len(trace.errors)}")
+        print(f"    Fallback repairs:{trace.fallback_repairs}")
+        print(f"    Fallback rejects:{trace.fallback_rejects}")
         print(f"    Wall time:       {trace.wall_time_seconds}s")
         if trace.final_answer:
             print(f"    Final answer:    {trace.final_answer.get('action', 'N/A')}")
@@ -386,6 +426,7 @@ def print_trace_summary(trace: AgentTrace) -> None:
     print(f"Task: {trace.task}")
     print(f"Status: {'completed' if trace.completed else 'incomplete'} ({trace.stop_reason})")
     print(f"Tool calls: {trace.total_tool_calls} valid, {len(trace.errors)} errors")
+    print(f"Fallbacks: {trace.fallback_repairs} repairs, {trace.fallback_rejects} rejects")
     print(f"Wall time: {trace.wall_time_seconds}s ({trace.model_calls} model calls)")
     print()
 
@@ -393,7 +434,8 @@ def print_trace_summary(trace: AgentTrace) -> None:
     for i, step in enumerate(trace.steps, 1):
         status = "OK" if step.valid else "FAIL"
         thought = f' "{step.thought}"' if step.thought else ""
-        print(f"  {i:2d}. [{status}] {step.tool_name}({step.arguments}){thought}")
+        fb_tag = f" [repaired: {step.repairs_applied}]" if step.repairs_applied else ""
+        print(f"  {i:2d}. [{status}] {step.tool_name}({step.arguments}){thought}{fb_tag}")
         if not step.valid:
             print(f"      Error: {step.validation_error}")
 
@@ -419,6 +461,8 @@ def trace_to_trajectory(trace: AgentTrace) -> list[dict[str, Any]]:
             "valid": step.valid,
             "thought": step.thought,
             "validation_error": step.validation_error,
+            "fallback_action": step.fallback_action,
+            "repairs_applied": step.repairs_applied,
         })
     if trace.final_answer:
         trajectory.append({
@@ -429,5 +473,7 @@ def trace_to_trajectory(trace: AgentTrace) -> list[dict[str, Any]]:
             "valid": True,
             "thought": None,
             "validation_error": None,
+            "fallback_action": None,
+            "repairs_applied": None,
         })
     return trajectory
