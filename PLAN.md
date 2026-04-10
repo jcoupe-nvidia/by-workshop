@@ -52,12 +52,12 @@ Build a workshop-ready, notebook-centric MVP for late-order recovery on the NVID
 - Define a clear repair-vs-reject policy and surface that policy in the notebook with one worked repair trajectory.
 - Make fallback behavior inspectable and deterministic enough that workshop attendees can see exactly why a call was repaired or rejected.
 
-## Phase 6: Worked Examples And Evaluation ← next
+## Phase 6: Worked Examples And Evaluation ✅
 - Add one successful trajectory and one failure-or-repair trajectory inside the notebook.
 - Implement evaluators in `src/evaluation.py` for skill selection quality, tool validity, tool accuracy, sequence correctness, task success, recovery quality, and efficiency.
 - Ensure at least one evaluator explicitly checks ordered dependencies such as inventory discovery before transfer ETA and candidate option generation before scoring.
 
-## Phase 7: Training-Oriented Wrap-Up
+## Phase 7: Training-Oriented Wrap-Up ← next
 - Add notebook sections showing how traces, repair cases, and evaluator outputs could be curated locally and prepared for downstream export.
 - Add one concrete export or handoff example for NeMo RL and frame reward design using NVIDIA ProRL concepts.
 - Connect the trajectory and reward design discussion to NVIDIA Megatron and the target environment of `8 H100 GPUs`, but keep it conceptual rather than operational.
