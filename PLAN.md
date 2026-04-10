@@ -47,7 +47,7 @@ Build a workshop-ready, notebook-centric MVP for late-order recovery on the NVID
 - Keep model integration narrow: one adapter function or class that can call the chosen model endpoint while the rest of the stack remains deterministic and testable.
 - Capture full trajectory state so the notebook can replay a successful run and inspect intermediate reasoning safely.
 
-## Phase 5: Add Fallback Parsing And Recovery
+## Phase 5: Add Fallback Parsing And Recovery ✅
 - Implement malformed-output handling in `src/fallbacks.py` for malformed JSON, mixed text plus JSON, missing fields, unknown tools, and unsafe arguments.
 - Define a clear repair-vs-reject policy and surface that policy in the notebook with one worked repair trajectory.
 - Make fallback behavior inspectable and deterministic enough that workshop attendees can see exactly why a call was repaired or rejected.
