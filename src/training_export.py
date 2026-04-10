@@ -391,8 +391,11 @@ def megatron_training_config_sketch(
                 "the same cluster could handle larger models with adjusted parallelism."
             ),
         },
-        "opencode": {
-            "role": "Agent loop harness producing traces and evaluations",
+        "opencode_inspired_architecture": {
+            "role": (
+                "OpenCode-inspired architecture implemented locally for "
+                "visibility, trace capture, and evaluation"
+            ),
             "trace_format": "AgentTrace with ToolCallRecord steps",
             "evaluation_format": "TrajectoryEvaluation with 7 DimensionScores",
         },

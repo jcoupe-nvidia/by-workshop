@@ -172,7 +172,8 @@ These are hard requirements for the notebook design:
 - **NVIDIA ProRL**
   - for framing reward design around tool validity, sequence correctness, recovery quality, and task success
 - **OpenCode**
-  - as the explicitly named harness for the agent loop, tool registry, execution tracing, and worked examples
+  - as the architectural inspiration for the agent loop, tool registry, execution tracing, and worked examples
+  - implement a small local version so the execution flow remains visible for workshop understanding
 
 Integration should stay narrow, local, and demonstrative. Prefer one concrete export or handoff example rather than building a full training or platform stack inside the notebook.
 

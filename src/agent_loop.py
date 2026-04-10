@@ -1,5 +1,9 @@
 """
-OpenCode-style agent execution loop and model adapter.
+OpenCode-inspired agent execution loop and model adapter.
+
+This module intentionally implements a small local version of the
+architecture so the think -> emit tool call -> validate -> execute ->
+observe cycle stays visible and easy to understand in the workshop.
 
 Loop steps:
     1. Think   -- model receives context and emits a response

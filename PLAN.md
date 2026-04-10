@@ -10,7 +10,7 @@ Build a workshop-ready, notebook-centric MVP for late-order recovery on the NVID
 ## Fixed Constraints From The Spec
 - Keep the scenario centered on late order recovery for `SO-10482` with machine-checkable sequence dependencies from [CLAUDE.md](CLAUDE.md).
 - Target a typical successful run of `5-10` tool calls, `2-4` explicit skills, and `7-9` deterministic tools.
-- Explicitly cover the required stack references: NeMo RL, NVIDIA Megatron, NVIDIA ProRL, and OpenCode.
+- Explicitly cover the required stack references: NeMo RL, NVIDIA Megatron, NVIDIA ProRL, and OpenCode as the architectural inspiration for the local loop.
 
 ## Proposed Repo Shape
 - [notebooks/late_order_recovery_workshop.ipynb](notebooks/late_order_recovery_workshop.ipynb): the main pedagogical artifact and live demo flow.
@@ -44,7 +44,7 @@ Build a workshop-ready, notebook-centric MVP for late-order recovery on the NVID
 
 ## Phase 4: Implement Real Model Agent Loop ✅
 - Build the canonical tool-call schema and validation logic in `src/schema.py`.
-- Implement the OpenCode-style execution loop in `src/agent_loop.py`: prompt model, parse output, validate tool call, execute tool, append observation, continue with bounded iterations.
+- Implement an OpenCode-inspired execution loop in `src/agent_loop.py`: prompt model, parse output, validate tool call, execute tool, append observation, and continue with bounded iterations. Build the loop locally so each step stays visible for workshop understanding.
 - Keep model integration narrow: one adapter function or class that can call the chosen model endpoint while the rest of the stack remains deterministic and testable.
 - Capture full trajectory state so the notebook can replay a successful run and inspect intermediate reasoning safely.
 

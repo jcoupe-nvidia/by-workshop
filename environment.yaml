@@ -3,7 +3,7 @@ channels:
   - defaults
 dependencies:
   - python=3.12
-  - jupyter
+  - jupyterlab
   - ipykernel
   - pip
   - pip:
