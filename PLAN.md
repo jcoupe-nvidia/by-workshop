@@ -24,7 +24,7 @@ Build a workshop-ready, notebook-centric MVP for late-order recovery on the NVID
 - [README.md](README.md): concise repo entrypoint and how to run the notebook.
 - Optional later: [examples/](examples/) or [artifacts/](artifacts/) for saved traces and evaluator outputs if that improves workshop usability.
 
-## Phase 1: Design The Scenario And Skeleton
+## Phase 1: Design The Scenario And Skeleton ✅
 - Create the notebook outline to mirror the eleven required sections from [CLAUDE.md](CLAUDE.md).
 - Lock the single scenario, success criteria, sequence dependencies, and mitigation option set before writing execution code.
 - Define the minimal helper-module boundaries so the notebook stays short and presentation-friendly.

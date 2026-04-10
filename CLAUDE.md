@@ -13,6 +13,10 @@ This repository contains an MVP notebook for a workshop on agentic supply-chain 
 
 This is a pedagogical artifact, not a production system. The goal is to show concrete patterns, tradeoffs, and evaluation methods in a form that is easy to present live.
 
+## Local model access reference
+
+When this repo needs to call the locally deployed LLM, use `documents/llm-access.md` as the source of truth for the endpoint, model id, smoke test, and cache mapping.
+
 ## Core scenario
 
 Build one end-to-end example around **late order recovery for a constrained customer shipment**.
