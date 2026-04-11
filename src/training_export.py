@@ -1,24 +1,43 @@
 """
-Training-oriented export utilities for trajectory export and reward design.
+Backward-compatibility shim for src.training_export.
 
-Converts agent traces and evaluation results into formats suitable for
-downstream training workflows:
+The canonical definitions now live in:
+    - src.rollouts.export_adapters  (training trajectory types, export, serialization)
+    - src.training.reward_views     (stage-aware reward views and shaping)
+    - src.training.datasets         (training record types and dataset assembly)
+    - src.envs.rewards              (reward computation)
 
-    - Training trajectory export:  JSONL records with per-step observations,
-                                   actions, and rewards for post-training flows.
-    - Reward computation:          Per-step and trajectory-level reward signals
-                                   derived from the seven evaluation dimensions.
-
-Integration is narrow and demonstrative -- the goal is to show *what* gets
-exported and *how* reward signals are shaped, not to build a full pipeline.
+This module re-exports everything so existing imports continue to work.
+It also provides adapter functions that accept the backward-compatible
+AgentTrace type, converting to canonical Episode before calling canonical code.
 """
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass, asdict
+from src.rollouts.export_adapters import (  # noqa: F401
+    TrainingTrajectoryStep,
+    TrainingTrajectory,
+    episode_to_training_trajectory,
+    training_trajectory_to_jsonl as trajectory_to_jsonl,
+    save_training_trajectories_jsonl as save_trajectories_jsonl,
+)
+
+from src.training.reward_views import (  # noqa: F401
+    STAGE_REWARD_WEIGHTS,
+    StepRewardView,
+    EpisodeRewardView,
+    build_episode_reward_view,
+    get_per_step_rewards,
+)
+
+# -- AgentTrace adapters (kept for notebook backward compat) -----------------
+#
+# The functions below accept the legacy AgentTrace type and convert to
+# canonical Episode / enriched-episode paths before calling canonical code.
+# New code should use the canonical modules directly.
+
 from typing import Any
 
-from src.agent_loop import AgentTrace, ToolCallRecord, trace_to_trajectory
+from src.runtime.agent import AgentTrace, ToolCallRecord
 from src.evaluation import (
     evaluate_trajectory,
     TrajectoryEvaluation,
@@ -26,151 +45,17 @@ from src.evaluation import (
     DIMENSION_WEIGHTS,
     EVAL_DIMENSIONS,
     OPTIMAL_TOOL_SEQUENCE,
+    _agent_trace_to_episode,
 )
-from src.tools import TOOL_DEPENDENCIES
+from src.rollouts.episode_runner import enrich_episode
+from src.runtime.tools import TOOL_DEPENDENCIES
 
 
-# ---------------------------------------------------------------------------
-# 1. Training trajectory export
-# ---------------------------------------------------------------------------
-
-@dataclass
-class TrainingTrajectoryStep:
-    """One step in a training-compatible trajectory record."""
-    step_index: int
-    observation: str       # what the agent saw before acting
-    action: str            # the tool call or final answer (as JSON string)
-    reward: float          # per-step reward signal
-    done: bool             # whether this step ends the episode
-    info: dict[str, Any]   # metadata: tool validity, fallback, etc.
-
-
-@dataclass
-class TrainingTrajectory:
-    """Full trajectory formatted for downstream training consumption."""
-    task_id: str
-    model_id: str
-    steps: list[TrainingTrajectoryStep]
-    total_reward: float
-    episode_length: int
-    metadata: dict[str, Any]
-
-
-def export_training_trajectory(
-    trace: AgentTrace,
-    evaluation: TrajectoryEvaluation,
-    step_rewards: list[float],
-    model_id: str = "nvidia/nemotron-3-nano",
-) -> TrainingTrajectory:
-    """Convert an AgentTrace + evaluation into a training trajectory record.
-
-    Args:
-        trace: The agent trace from a completed run.
-        evaluation: The seven-dimension evaluation of the trace.
-        step_rewards: Per-step reward values (from compute_step_rewards).
-        model_id: The model identifier for provenance.
-
-    Returns:
-        TrainingTrajectory ready for serialization.
-    """
-    training_steps: list[TrainingTrajectoryStep] = []
-
-    for i, step in enumerate(trace.steps):
-        # Observation: the tool result from the previous step (or task prompt)
-        if i == 0:
-            observation = trace.task
-        else:
-            prev = trace.steps[i - 1]
-            observation = json.dumps(prev.result)
-
-        # Action: the tool call as a structured JSON string
-        action = json.dumps({
-            "tool_call": {
-                "name": step.tool_name,
-                "arguments": step.arguments,
-            },
-            "thought": step.thought,
-        })
-
-        reward = step_rewards[i] if i < len(step_rewards) else 0.0
-        is_last = (i == len(trace.steps) - 1) and trace.completed
-
-        training_steps.append(TrainingTrajectoryStep(
-            step_index=i,
-            observation=observation,
-            action=action,
-            reward=reward,
-            done=is_last,
-            info={
-                "tool_name": step.tool_name,
-                "valid": step.valid,
-                "fallback_action": step.fallback_action,
-                "iteration": step.iteration,
-            },
-        ))
-
-    # Add final answer step if present
-    if trace.final_answer:
-        final_obs = json.dumps(trace.steps[-1].result) if trace.steps else trace.task
-        final_action = json.dumps({"final_answer": trace.final_answer})
-        # Final step gets the task-success component of the reward
-        final_reward = next(
-            (s.score for s in evaluation.scores if s.dimension == "task_success"),
-            0.0,
-        )
-        training_steps.append(TrainingTrajectoryStep(
-            step_index=len(trace.steps),
-            observation=final_obs,
-            action=final_action,
-            reward=final_reward,
-            done=True,
-            info={"tool_name": "<final_answer>", "valid": True},
-        ))
-
-    total_reward = sum(s.reward for s in training_steps)
-
-    return TrainingTrajectory(
-        task_id=trace.task,
-        model_id=model_id,
-        steps=training_steps,
-        total_reward=round(total_reward, 4),
-        episode_length=len(training_steps),
-        metadata={
-            "evaluation_overall": evaluation.overall,
-            "evaluation_passed": evaluation.passed,
-            "wall_time_seconds": trace.wall_time_seconds,
-            "model_calls": trace.model_calls,
-            "fallback_repairs": trace.fallback_repairs,
-            "fallback_rejects": trace.fallback_rejects,
-        },
-    )
-
-
-def trajectory_to_jsonl(trajectory: TrainingTrajectory) -> str:
-    """Serialize a training trajectory to a single JSONL line."""
-    record = {
-        "task_id": trajectory.task_id,
-        "model_id": trajectory.model_id,
-        "total_reward": trajectory.total_reward,
-        "episode_length": trajectory.episode_length,
-        "steps": [asdict(s) for s in trajectory.steps],
-        "metadata": trajectory.metadata,
-    }
-    return json.dumps(record)
-
-
-# ---------------------------------------------------------------------------
-# 2. Step and trajectory reward computation
-# ---------------------------------------------------------------------------
-
-# Per-step reward components and their weights.
-# These map directly to the evaluation dimensions but are applied at the
-# step level rather than the trajectory level.
 STEP_REWARD_COMPONENTS = {
-    "tool_validity":        0.25,   # was this specific call well-formed?
-    "sequence_correctness": 0.35,   # were dependencies satisfied at this step?
-    "tool_accuracy":        0.20,   # did arguments match expected values?
-    "recovery_bonus":       0.20,   # bonus for successful fallback repair
+    "tool_validity":        0.25,
+    "sequence_correctness": 0.35,
+    "tool_accuracy":        0.20,
+    "recovery_bonus":       0.20,
 }
 
 
@@ -178,26 +63,14 @@ def compute_step_rewards(
     trace: AgentTrace,
     expected_arguments: dict[str, dict[str, Any]] | None = None,
 ) -> list[float]:
-    """Compute per-step reward signals using the repo's reward decomposition.
+    """Compute per-step reward signals for a legacy AgentTrace.
 
-    Each step receives a reward based on:
-        - Tool validity:  +1.0 if valid, -0.5 if invalid
-        - Sequence correctness: +1.0 if all dependencies met, -1.0 if violated
-        - Tool accuracy:  +1.0 if arguments match expected, +0.5 if partially correct
-        - Recovery bonus:  +0.5 if the step was successfully repaired via fallback
-
-    These component scores are combined using STEP_REWARD_COMPONENTS weights.
-
-    Args:
-        trace: The agent trace to score.
-        expected_arguments: Optional dict of tool_name -> expected args for
-                           accuracy checking. If None, accuracy gets +0.5 default.
-
-    Returns:
-        List of float rewards, one per step in trace.steps.
+    Kept for backward compatibility.  New code should use the canonical
+    path: build an Episode, enrich it via episode_runner, then read
+    rewards from the EpisodeRewardSummary.
     """
     if expected_arguments is None:
-        from src.evaluation import EXPECTED_ARGUMENTS
+        from src.envs.rewards import EXPECTED_ARGUMENTS
         expected_arguments = EXPECTED_ARGUMENTS
 
     rewards: list[float] = []
@@ -205,11 +78,8 @@ def compute_step_rewards(
 
     for step in trace.steps:
         components: dict[str, float] = {}
-
-        # Tool validity
         components["tool_validity"] = 1.0 if step.valid else -0.5
 
-        # Sequence correctness
         if step.valid:
             deps = TOOL_DEPENDENCIES.get(step.tool_name, set())
             missing_deps = deps - called_so_far
@@ -218,7 +88,6 @@ def compute_step_rewards(
         else:
             components["sequence_correctness"] = -0.5
 
-        # Tool accuracy
         if step.valid and step.tool_name in expected_arguments:
             expected = expected_arguments[step.tool_name]
             matches = sum(
@@ -227,9 +96,8 @@ def compute_step_rewards(
             )
             components["tool_accuracy"] = matches / len(expected) if expected else 1.0
         else:
-            components["tool_accuracy"] = 0.5  # neutral default
+            components["tool_accuracy"] = 0.5
 
-        # Recovery bonus
         if step.fallback_action == "repaired" and step.valid:
             components["recovery_bonus"] = 0.5
         elif step.fallback_action == "repaired" and not step.valid:
@@ -237,7 +105,6 @@ def compute_step_rewards(
         else:
             components["recovery_bonus"] = 0.0
 
-        # Weighted sum
         reward = sum(
             components[k] * STEP_REWARD_COMPONENTS[k]
             for k in STEP_REWARD_COMPONENTS
@@ -255,39 +122,24 @@ def compute_trajectory_reward(
 ) -> float:
     """Combine step-level and trajectory-level rewards into a single signal.
 
-    The total reward is framed as a blend of:
-        - Dense step-level rewards (encourage correct behavior at each step)
-        - Sparse trajectory-level reward (overall task success)
-
-    The trajectory-level component uses the weighted evaluation score
-    from the seven-dimension evaluator.
-
-    Args:
-        evaluation: The trajectory evaluation result.
-        step_rewards: Per-step rewards from compute_step_rewards.
-        step_weight: Weight for the step-level component (0-1).
-        trajectory_weight: Weight for the trajectory-level component (0-1).
-
-    Returns:
-        Combined reward signal (float).
+    Kept for backward compatibility.  New code should use
+    build_episode_reward_view() from src.training.reward_views.
     """
     avg_step_reward = sum(step_rewards) / len(step_rewards) if step_rewards else 0.0
     trajectory_score = evaluation.overall
-
     combined = (step_weight * avg_step_reward) + (trajectory_weight * trajectory_score)
     return round(combined, 4)
 
-
-# ---------------------------------------------------------------------------
-# 3. Reward signal summary (for display / inspection)
-# ---------------------------------------------------------------------------
 
 def print_reward_breakdown(
     trace: AgentTrace,
     step_rewards: list[float],
     evaluation: TrajectoryEvaluation,
 ) -> None:
-    """Pretty-print the per-step and trajectory reward breakdown."""
+    """Pretty-print the per-step and trajectory reward breakdown.
+
+    Kept for backward compatibility.
+    """
     print("Per-step rewards (training decomposition)")
     print("-" * 75)
     print(f"{'Step':>4}  {'Tool':<30}  {'Valid':>5}  {'Reward':>7}  Notes")
@@ -314,22 +166,42 @@ def print_reward_breakdown(
     print(f"Combined reward:  {total:+.4f}")
 
 
-# ---------------------------------------------------------------------------
-# 4. Export to file helpers
-# ---------------------------------------------------------------------------
+def export_training_trajectory(
+    trace: AgentTrace,
+    evaluation: TrajectoryEvaluation,
+    step_rewards: list[float],
+    model_id: str = "nvidia/nemotron-3-nano",
+) -> TrainingTrajectory:
+    """Convert an AgentTrace + evaluation into a training trajectory record.
 
-def save_trajectories_jsonl(
-    trajectories: list[TrainingTrajectory],
-    path: str,
-) -> None:
-    """Write a list of training trajectories to a JSONL file.
-
-    Args:
-        trajectories: List of trajectories to export.
-        path: Output file path.
+    Kept for backward compatibility.  New code should use
+    episode_to_training_trajectory() from src.rollouts.export_adapters
+    with a canonical Episode.
     """
-    with open(path, "w") as f:
-        for traj in trajectories:
-            f.write(trajectory_to_jsonl(traj) + "\n")
+    import re
 
+    episode = _agent_trace_to_episode(trace)
+    episode.model_id = model_id
 
+    # Try to extract order ID for environment enrichment
+    order_match = re.search(r"(SO-\d+)", trace.task)
+    order_id = order_match.group(1) if order_match else None
+
+    if order_id:
+        try:
+            enriched = enrich_episode(episode, order_id=order_id)
+            traj = episode_to_training_trajectory(
+                enriched.episode,
+                reward_summary=enriched.reward_summary,
+            )
+        except (ValueError, KeyError):
+            # Fall back to export without environment rewards
+            traj = episode_to_training_trajectory(episode)
+    else:
+        traj = episode_to_training_trajectory(episode)
+
+    # Augment metadata with legacy evaluation fields
+    traj.metadata["evaluation_overall"] = evaluation.overall
+    traj.metadata["evaluation_passed"] = evaluation.passed
+
+    return traj

@@ -2,8 +2,6 @@
 
 Notebook-centric workshop repo for agentic supply-chain workflows on the NVIDIA stack.
 
-The repository is being refactored from a custom notebook-led demo into a library that uses the actual NVIDIA stack for runtime orchestration, rollout collection, and post-training. The target end state is one late-order-recovery scenario implemented with deterministic tools, explicit skills, structured tool calling, fallback handling, sequence-sensitive evaluation, and real NVIDIA-library-backed integration paths.
-
 ## What This Repo Demonstrates
 
 - Multi-turn agent execution against a local OpenAI-compatible model endpoint
@@ -11,21 +9,7 @@ The repository is being refactored from a custom notebook-led demo into a librar
 - Nemotron-style structured tool calling with validation and dependency checks
 - Repair/reject fallback handling for malformed tool outputs
 - Sequence-sensitive evaluation and training-oriented export
-- Ongoing migration to real `NeMo Agent Toolkit`, repo-owned canonical rollouts, and `openpipe-art`
-
-## Active Environment Stack
-
-The intended working environment for this repo now explicitly includes the active libraries used by the current notebook and refactor path:
-
-- `nvidia-nat` for NeMo Agent Toolkit runtime orchestration
-- `nemo-gym` for environment-oriented rollouts and reward inspection
-- `openpipe-art` for training-oriented exports and post-training alignment
-
-The current `environment.yaml` installs:
-
-- package installs for `nvidia-nat`, `nemo-gym`, and `openpipe-art`
-
-Earlier planning docs may still mention older trainer-facing or rollout-shaping framing because they originally explained the roles of training semantics and rollout infrastructure. Those references are historical context only.
+- NAT-backed runtime, repo-owned canonical rollouts, and `openpipe-art`-facing training
 
 ## Core Scenario
 
@@ -38,19 +22,71 @@ The agent investigates whether the original source DC can still fulfill the orde
 - partial fulfillment
 - substitute SKU recommendation when enabled
 
-## Repository Layout
+## Package Architecture
 
-- `notebooks/late_order_recovery_workshop.ipynb`: main workshop notebook and live demo flow
-- `documents/llm-access.md`: local model endpoint, model id, and smoke test
-- `src/scenario_data.py`: synthetic in-memory orders, shipments, inventory, transfer lanes, supplier options, capacity, and substitutes
-- `src/runtime/`: NAT-facing runtime package
-- `src/envs/`: explicit task environment state, transitions, validators, and rewards
-- `src/rollouts/`: canonical trace types plus repo-owned rollout and serialization logic
-- `src/training/`: `openpipe-art`-facing training semantics
-- ~~`src/systems/`~~: removed in Phase 6 — no active code depended on it
-- `src/eval/`: offline evaluation and reporting
-- `src/main.py`: entrypoint for local checks and episode execution
-- legacy top-level modules such as `src/tools.py` and `src/agent_loop.py` currently remain as compatibility shims during migration
+```
+src/
+├── runtime/         # NAT-facing single-episode runtime
+│   ├── agent.py         model adapter + agent loop
+│   ├── schemas.py       tool-call validation
+│   ├── tools.py         deterministic business tools (7-9)
+│   ├── workflows.py     4 higher-level workflow decompositions
+│   ├── prompts.py       prompt construction
+│   ├── fallbacks.py     repair / reject logic
+│   ├── tracing.py       structured event emission
+│   ├── nat_tools.py     NAT Function wrappers
+│   ├── nat_llm.py       NIM config
+│   ├── atif_adapter.py  ATIF trajectory conversion
+│   └── skills/          directory-backed skill packages
+│       ├── api.py           list_skills, search_skills, get_skill, run_skill_command
+│       └── <skill-name>/    SKILL.md + optional sidecars
+│
+├── envs/            # Explicit task environment
+│   ├── state.py         LateOrderEnvState, Subgoal enum
+│   ├── transitions.py   state machine transitions
+│   ├── rewards.py       dense, sequence-aware reward signals
+│   ├── validators.py    dependency checking
+│   ├── late_order_env.py  LateOrderRecoveryEnv
+│   └── nemo_gym_adapter.py  nemo-gym-compatible export
+│
+├── rollouts/        # Canonical traces and serialization
+│   ├── trace_types.py     Episode, Event, EventType (source of truth)
+│   ├── episode_runner.py  run + enrich episodes with env rewards
+│   ├── serializers.py     Episode <-> JSONL
+│   ├── export_adapters.py Episode -> training trajectory + ATIF
+│   └── scripted_traces.py pre-built episodes for workshop demos
+│
+├── training/        # openpipe-art-facing training semantics
+│   ├── curriculum.py          4-stage training progression
+│   ├── reward_views.py        stage-aware reward shaping
+│   ├── datasets.py            training record construction
+│   ├── openpipe_art_adapter.py  openpipe-art record building
+│   └── experiments.py         experiment config
+│
+├── eval/            # Offline evaluation and reporting
+│   ├── metrics.py       7 evaluators, TrajectoryEvaluation
+│   └── reports.py       display and report helpers
+│
+├── scenario_data.py   # Synthetic in-memory data tables
+├── main.py            # CLI entrypoint
+└── <legacy shims>     # Backward-compat re-exports (see migration notes)
+```
+
+### Ownership boundaries
+
+| Package | Owns | Does NOT own |
+|---|---|---|
+| `runtime/` | Tool definitions, schemas, prompts, fallbacks, tracing, agent loop, skill discovery | Rollout orchestration, reward computation, training datasets |
+| `envs/` | Task state, transitions, rewards, validators | Runtime behavior, training semantics |
+| `rollouts/` | Trace types, episode running, serialization, export adapters | Tool schemas, reward formulas, dataset views |
+| `training/` | Curriculum, reward views, datasets, openpipe-art adapters | Runtime interfaces, rollout orchestration |
+| `eval/` | Offline metrics, reports | Reward definitions (consumed from `envs/`) |
+
+## Active Environment Stack
+
+- `nvidia-nat` for NeMo Agent Toolkit runtime orchestration
+- `nemo-gym` for environment-oriented rollouts and reward inspection
+- `openpipe-art` for training-oriented exports and post-training alignment
 
 ## Execution Flow
 
@@ -65,8 +101,6 @@ The typical successful path uses `5-10` tool calls across a compact deterministi
 
 ## Quickstart
 
-Run these commands from the repository root:
-
 ```bash
 conda env create -f environment.yaml
 conda activate by-workshop
@@ -76,9 +110,7 @@ jupyter lab
 
 Then open `notebooks/late_order_recovery_workshop.ipynb`.
 
-## Verify NVIDIA Libraries
-
-After creating the environment, confirm the required stack is present:
+### Verify NVIDIA libraries
 
 ```bash
 nat --version
@@ -91,13 +123,6 @@ print("openpipe-art version:", version("openpipe-art"))
 PY
 ```
 
-Notes:
-
-- `NeMo Agent Toolkit` publishes the `nat` CLI through the `nvidia-nat` package.
-- `openpipe-art` is now the primary training-oriented package in `environment.yaml`.
-- `nemo-gym` remains useful for explicit environment and reward-signal inspection even though the training-oriented path now centers `openpipe-art`.
-- Upstream NVIDIA docs generally prefer `uv`-managed virtual environments for these libraries; this repo keeps a `conda` environment only as a workshop convenience wrapper.
-
 ## Local Model
 
 The live agent loop expects a locally deployed OpenAI-compatible chat endpoint:
@@ -109,17 +134,26 @@ See `documents/llm-access.md` for the smoke test request and cache mapping.
 
 ## Minimal Python Example
 
-You can run the live agent loop outside the notebook as well:
+Run the live agent loop outside the notebook:
 
 ```python
-from src.agent_loop import run_agent, print_trace_summary
-from src.evaluation import evaluate_trajectory, print_evaluation
+from src.runtime.agent import run_agent, print_trace_summary
+from src.eval.metrics import evaluate_trajectory
+from src.eval.reports import print_evaluation
 
 trace = run_agent("SO-10482", verbose=False)
 print_trace_summary(trace)
 
 evaluation = evaluate_trajectory(trace)
 print_evaluation(evaluation)
+```
+
+Or via the CLI:
+
+```bash
+python -m src.main --episode SO-10482
+python -m src.main --rollout SO-10482
+python -m src.main --rollout SO-10482 --save-jsonl artifacts/episode.jsonl
 ```
 
 ## Outputs
@@ -133,14 +167,44 @@ When you run the later notebook sections, the repo can produce:
 
 The notebook writes generated training artifacts under `artifacts/` when those export cells are executed.
 
+## Module Migration Reference
+
+The following modules were split during refactoring. The original top-level files remain as backward-compat shims that re-export from their canonical homes.
+
+| Original module | Canonical location(s) |
+|---|---|
+| `src/tools.py` | `src/runtime/tools.py` |
+| `src/skills.py` | `src/runtime/workflows.py` + `src/runtime/skills/` |
+| `src/schema.py` | `src/runtime/schemas.py` + `src/envs/validators.py` |
+| `src/agent_loop.py` | `src/runtime/agent.py` + `src/runtime/prompts.py` + `src/runtime/tracing.py` |
+| `src/fallbacks.py` | `src/runtime/fallbacks.py` |
+| `src/evaluation.py` | `src/eval/metrics.py` + `src/eval/reports.py` |
+| `src/training_export.py` | `src/rollouts/export_adapters.py` + `src/training/reward_views.py` + `src/training/datasets.py` |
+
+The notebook imports from the canonical modules directly. The shims exist only for external consumers that may still reference the old paths.
+
 ## Migration Status
 
-The repo is mid-migration from local stand-ins to the current NAT + canonical rollouts + `openpipe-art` path.
+All migration phases are complete.
 
-- **Phases 1–5**: Complete — canonical contracts, NAT runtime, environment, rollouts, and training semantics are in place.
-- **Phase 6**: Complete — `src/systems/` removed, scale-out config sketch deleted, no active path depends on earlier systems assumptions.
-- **Phase 7**: Pending — rebuild offline evaluation on top of new contracts.
-- **Phase 8**: Pending — demote notebook to consumer and finish public surfaces.
+- **Phase 1**: Canonical contracts — trace types, event vocabulary, package skeleton
+- **Phase 2**: NAT-friendly runtime — tools, schemas, prompts, fallbacks, agent loop, skills
+- **Phase 3**: Explicit environment — state machine, transitions, dense rewards
+- **Phase 4**: Rollout layer — episode runner, serializers, export adapters
+- **Phase 5**: Training semantics — curriculum, reward views, datasets, openpipe-art adapter
+- **Phase 6**: Removed `src/systems/` and scale-out config sketches
+- **Phase 7**: Rebuilt offline evaluation on canonical Episode traces
+- **Phase 8**: Demoted notebook to library consumer, finished public surfaces
+
+## Historical Context
+
+Earlier planning docs may reference trainer-facing, rollout-shaping, or scale-out systems framing. Those terms describe the historical evolution of the design:
+
+- **Trainer-facing** referred to early training-export assumptions before `openpipe-art` became the primary training path
+- **Rollout-shaping** referred to rollout infrastructure concepts before the repo adopted its own canonical trace types
+- **Scale-out systems** referred to multi-node deployment assumptions (8 H100 environment) before the scope was narrowed to local single-episode demonstration
+
+These references are preserved where they explain design decisions but no active code path depends on them.
 
 ## Scope
 

@@ -33,11 +33,6 @@ def main(argv: list[str] | None = None) -> None:
         help="Run a full agent episode (requires local model endpoint).",
     )
     parser.add_argument(
-        "--structured",
-        action="store_true",
-        help="Use structured Episode output instead of legacy AgentTrace.",
-    )
-    parser.add_argument(
         "--rollout",
         action="store_true",
         help="Run via the rollout layer (enriched episode with env rewards).",
@@ -59,7 +54,7 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     if args.episode:
-        _run_episode(args.order, structured=args.structured)
+        _run_episode(args.order)
         return
 
     print(f"Order: {args.order}")
@@ -70,7 +65,7 @@ def main(argv: list[str] | None = None) -> None:
 
 def _check_imports() -> None:
     """Import every package and key module to verify the skeleton is sound."""
-    # New runtime package
+    # Runtime package
     import src.runtime
     import src.runtime.schemas
     import src.runtime.tools
@@ -94,15 +89,25 @@ def _check_imports() -> None:
     import src.rollouts.episode_runner
     import src.rollouts.serializers
     import src.rollouts.export_adapters
+    import src.rollouts.scripted_traces
 
-    # Other packages
+    # Training package
     import src.training
     import src.training.curriculum
-    import src.eval
+    import src.training.reward_views
+    import src.training.datasets
+    import src.training.experiments
 
-    # Backward-compatible shims
-    import src.schema
+    # Evaluation package
+    import src.eval
+    import src.eval.metrics
+    import src.eval.reports
+
+    # Scenario data
     import src.scenario_data
+
+    # Backward-compatible shims (still importable)
+    import src.schema
     import src.tools
     import src.skills
     import src.fallbacks
@@ -134,20 +139,15 @@ def _run_rollout(order_id: str, save_path: str | None = None) -> None:
         print(f"Saved episode to {save_path}")
 
 
-def _run_episode(order_id: str, structured: bool = False) -> None:
+def _run_episode(order_id: str) -> None:
     """Run one agent episode and print results."""
-    if structured:
-        from src.runtime.agent import run_agent_episode
-        episode = run_agent_episode(order_id)
-        print(f"\nEpisode complete: {episode.metrics.valid_tool_calls} tool calls, "
-              f"{episode.metrics.model_calls} model calls")
-        if episode.final_answer:
-            print(f"Final answer: {episode.final_answer}")
-    else:
-        from src.runtime.agent import run_agent, print_trace_summary
-        trace = run_agent(order_id)
-        print()
-        print_trace_summary(trace)
+    from src.runtime.agent import run_agent_episode
+
+    episode = run_agent_episode(order_id)
+    print(f"\nEpisode complete: {episode.metrics.valid_tool_calls} tool calls, "
+          f"{episode.metrics.model_calls} model calls")
+    if episode.final_answer:
+        print(f"Final answer: {episode.final_answer}")
 
 
 if __name__ == "__main__":
