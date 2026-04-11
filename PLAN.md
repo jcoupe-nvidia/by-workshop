@@ -28,7 +28,7 @@ flowchart LR
 ```
 
 ## Ownership Guardrails
-- `runtime/` owns single-episode agent behavior, prompt policy, tool invocation, and structured event emission. It must not schedule rollout jobs, construct RL datasets, choose distributed training topology, or own checkpoint conversion logic.
+- `runtime/` owns single-episode agent behavior, prompt policy, tool invocation, directory-backed skill discovery, metadata search, detailed skill loading, skill-command execution, and structured event emission. It must not schedule rollout jobs, construct RL datasets, choose distributed training topology, or own checkpoint conversion logic.
 - `envs/` owns task state, validity, transitions, terminal conditions, and reward-relevant facts. It defines what happened, but it must not decide rollout orchestration, trainer behavior, or distributed execution settings.
 - `rollouts/` owns episode running at scale, trace capture, failure and retry representation, and stable serialization. It must not redefine tool schemas, task environment logic, reward semantics, or Megatron execution settings.
 - `training/` owns trainer-facing datasets, reward views, experiments, and curriculum staging. It must not redefine runtime interfaces, rollout orchestration, or Megatron parallel configuration details.
@@ -45,7 +45,13 @@ flowchart LR
 
 ### 2. Refactor runtime into a NAT-friendly single-episode layer (complete)
 - Move deterministic tool implementations from [src/tools.py](src/tools.py) into [src/runtime/tools.py](src/runtime/tools.py) and keep the registry and schema metadata there.
-- Rename the skill layer from [src/skills.py](src/skills.py) into [src/runtime/workflows.py](src/runtime/workflows.py) so it represents runtime workflow decomposition rather than training semantics.
+- Replace the flat skill module at [src/skills.py](src/skills.py) with a directory-backed runtime skills package under [src/runtime/skills](src/runtime/skills) so NAT uses explicit skill assets rather than a monolithic workflow file.
+- Introduce the canonical runtime skill interfaces:
+  - `list_skills` for discovery: skill name, description, tags, and discovered files.
+  - `search_skills` for metadata search only: name, description, tags, declared assets, and filenames.
+  - `get_skill` as the detailed read path, loading either the full `SKILL.md` body or a specific sidecar file by relative path.
+  - `run_skill_command` for executing scripts present in the skills folder.
+- Keep skill metadata, sidecars, and scripts colocated per skill directory so runtime discovery remains cheap while detailed reads stay explicit and traceable.
 - Split [src/agent_loop.py](src/agent_loop.py) into small runtime modules:
   - [src/runtime/agent.py](src/runtime/agent.py) for the single-episode loop and model adapter boundary.
   - [src/runtime/prompts.py](src/runtime/prompts.py) for prompt and runtime policy.
@@ -106,12 +112,13 @@ flowchart LR
 - Do not hard-code notebook-only assumptions or bury config in ad hoc cells; keep launch surfaces config-driven.
 - Keep large-job system configuration separate from experiment and reward semantics.
 - Preserve the workshop scenario behavior, the current late-order-recovery flow, deterministic tool semantics, and the ability to run a local end-to-end demo.
+- Prefer directory-backed skills with concise `SKILL.md` files plus optional sidecars and scripts over growing a single catch-all workflow module.
 - Do not introduce unnecessary feature expansion or speculative abstractions without immediate use.
 - Do not rewrite [src/scenario_data.py](src/scenario_data.py) unless environment formalization requires it.
 - Do not remove the notebook; demote it to a consumer.
 
 ## Deliverables
-- Required code deliverables: new package structure under `src/`, canonical trajectory and event types, explicit environment state transitions, split runtime vs rollout vs training vs systems layers, updated imports and entrypoints, updated notebook wiring, and initial scalable training systems scaffolding for Megatron.
+- Required code deliverables: new package structure under `src/`, canonical trajectory and event types, explicit environment state transitions, a runtime skills package with `list_skills`, `search_skills`, `get_skill`, and `run_skill_command`, split runtime vs rollout vs training vs systems layers, updated imports and entrypoints, updated notebook wiring, and initial scalable training systems scaffolding for Megatron.
 - Required documentation deliverables: updated [README.md](README.md), module docstrings explaining responsibilities, migration notes summarizing what moved where, and a brief note clarifying NeMo RL versus Megatron responsibilities.
 - Optional but encouraged deliverables: a small CLI entrypoint for running one episode, a simple example of serialized trajectory output, a short architecture diagram in markdown, and one example large-job config profile.
 
@@ -119,6 +126,7 @@ flowchart LR
 - Clear ownership boundaries exist across runtime, environment, rollouts, evaluation, training semantics, and training systems.
 - No catch-all replacement for [src/training_export.py](src/training_export.py) reappears; export, training, rollout, and systems concerns are split cleanly.
 - Structured typed event records are canonical across runtime, rollouts, training, and evaluation.
+- NAT-facing runtime behavior uses a directory-backed skills architecture with `list_skills`, `search_skills`, `get_skill`, and `run_skill_command` as the canonical discovery, read, and execution surfaces.
 - Environment transition rules and task semantics are explicit and are not hidden in notebook cells or evaluation helpers.
 - The notebook is demoted to a consumer of the library rather than a holder of core logic.
 - NeMo RL-facing training semantics and Megatron-facing training systems responsibilities are clearly separated.

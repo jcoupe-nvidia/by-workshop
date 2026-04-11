@@ -26,7 +26,7 @@ Owns:
 - agent runtime behavior
 - tool definitions
 - tool schemas
-- workflow/subworkflow composition
+- directory-backed skill/workflow composition, discovery, loading, and execution
 - prompt/runtime policy
 - observability and tracing hooks
 
@@ -205,13 +205,35 @@ Owns:
 
 - tool definitions
 - tool schemas
-- workflow/subworkflow composition
+- directory-backed skill/workflow composition
+- skill discovery and metadata indexing
+- detailed skill reads and sidecar loading
+- skill command execution
 - prompt/runtime policy
 - agent execution adapter
 - turn-level trace emission
 - observability hooks
 
 This layer should implement the agent as it runs a single episode.
+
+### Runtime skill architecture
+
+Replace the flat workflow module with a directory-backed skills package under `src/runtime/skills/`.
+
+Each skill should live in its own folder and may include:
+
+- `SKILL.md` as the primary human-readable definition
+- optional sidecar files for examples or references
+- optional scripts that can be executed via the runtime
+
+The runtime should expose four canonical interfaces:
+
+- `list_skills` for discovery, returning skill name, description, tags, and discovered files
+- `search_skills` for metadata-only search over name, description, tags, declared assets, and filenames
+- `get_skill` for detailed reads, loading either the full `SKILL.md` body or a sidecar file by relative path
+- `run_skill_command` for executing scripts present in the skill folder
+
+These interfaces belong to NAT/runtime. They must not migrate into rollout, training, evaluation, or systems layers.
 
 ### B. `envs/`
 Purpose: explicit RL/task environment package
@@ -302,7 +324,13 @@ Refactor toward this structure:
 │   │   ├── __init__.py
 │   │   ├── agent.py
 │   │   ├── tools.py
-│   │   ├── workflows.py
+│   │   ├── skills/
+│   │   │   ├── __init__.py
+│   │   │   ├── api.py
+│   │   │   ├── diagnose-order-risk/
+│   │   │   │   ├── SKILL.md
+│   │   │   │   └── scripts/
+│   │   │   └── ...
 │   │   ├── schemas.py
 │   │   ├── prompts.py
 │   │   └── tracing.py
@@ -364,15 +392,20 @@ Requirements:
 - remove any evaluation-side reward logic from this module
 
 ### Existing: `src/skills.py`
-Refactor to: `src/runtime/workflows.py`
+Refactor to: `src/runtime/skills/`
 
 Requirements:
 
-- rename conceptually from "skills" to "workflows" or "policies"
-- represent allowed tool-use patterns and workflow decomposition
-- do not use this file to encode trainer-specific behavior
-- do not use this file to encode rollout infrastructure behavior
-- this file should describe runtime behavior only
+- replace the flat module with a directory-backed skills package
+- each skill directory should contain `SKILL.md` and may include sidecar files and scripts
+- implement `list_skills` for discovery: skill name, description, tags, and discovered files
+- implement `search_skills` for metadata search only: name, description, tags, declared assets, and filenames
+- implement `get_skill` as the detailed read path for the full `SKILL.md` body or a sidecar file by relative path
+- implement `run_skill_command` for executing scripts present in the skills folder
+- preserve allowed tool-use patterns and workflow decomposition within the runtime layer
+- do not use this package to encode trainer-specific behavior
+- do not use this package to encode rollout infrastructure behavior
+- keep this package runtime-owned and NAT-facing
 
 ### Existing: `src/schema.py`
 Refactor to: `src/runtime/schemas.py` and `src/envs/validators.py`
@@ -766,7 +799,7 @@ Claude should execute the refactor in this order.
 ### Phase 2: Move runtime logic
 
 1. move tools into `runtime/tools.py`
-2. move skills/policies into `runtime/workflows.py`
+2. replace the flat skills module with `runtime/skills/` and implement `list_skills`, `search_skills`, `get_skill`, and `run_skill_command`
 3. refactor the agent loop into `runtime/agent.py`
 4. make trace emission structured and canonical
 
