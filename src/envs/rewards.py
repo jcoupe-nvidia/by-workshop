@@ -9,7 +9,7 @@ Owns:
 
 Does NOT own:
     - Environment state or transitions (see envs.state, envs.transitions)
-    - Trainer-facing reward views or dataset adapters (see training/)
+    - Training-oriented reward views or dataset adapters (see training/)
     - Tool implementations or execution (see runtime.tools)
     - Offline evaluation metrics (see eval/)
 

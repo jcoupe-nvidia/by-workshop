@@ -12,7 +12,6 @@ Does NOT own:
     - Reward computation (see envs.rewards)
     - Environment state or transitions (see envs/)
     - Training dataset views or curriculum staging (see training/)
-    - Historical systems configuration (see systems/)
 
 Two output formats:
     1. TrainingTrajectory -- lightweight observation/action/reward triples for

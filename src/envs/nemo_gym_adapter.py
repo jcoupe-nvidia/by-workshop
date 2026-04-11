@@ -1,21 +1,22 @@
 """
-nemo-gym adapter: formats environment outputs for nemo-gym rollout collection.
+nemo-gym-compatible export adapter: formats environment outputs as
+training-oriented result rows.
 
-nemo-gym collects rollouts via HTTP agent servers and profiles rewards by
-aggregating numeric fields from result rows. This module converts enriched
-episodes into the JSONL row format that nemo-gym's RewardProfiler can
-process, and provides the input row format for rollout collection.
+Produces JSONL row records with numeric reward fields and episode metadata
+in a format compatible with nemo-gym's RewardProfiler for aggregation and
+inspection. These rows serve as generic training inputs — usable by
+openpipe-art or any downstream consumer that expects per-episode reward
+summaries alongside structured result metadata.
 
 Owns:
-    - Episode -> nemo-gym result row conversion
-    - Task -> nemo-gym input row formatting
-    - Reward field extraction for profiling
+    - Episode -> nemo-gym-compatible result row conversion
+    - Task -> rollout input row formatting
+    - Reward field extraction for profiling and training inspection
 
 Does NOT own:
     - Environment state or transitions (see envs/)
     - Episode types (see rollouts.trace_types)
-    - HTTP agent server implementation
-    - Rollout orchestration (that's nemo-gym's job)
+    - Rollout orchestration or collection infrastructure
 """
 from __future__ import annotations
 

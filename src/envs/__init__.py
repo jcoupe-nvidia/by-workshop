@@ -40,7 +40,7 @@ from src.envs.rewards import (  # noqa: F401
 from src.envs.late_order_env import LateOrderRecoveryEnv  # noqa: F401
 from src.envs.validators import check_dependencies  # noqa: F401
 
-# nemo-gym integration
+# nemo-gym-compatible export format (optional training input)
 from src.envs.nemo_gym_adapter import (  # noqa: F401
     episode_to_nemo_gym_row,
     build_rollout_input_row,

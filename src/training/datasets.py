@@ -1,5 +1,5 @@
 """
-Trainer-facing dataset views over enriched Episodes.
+Training-oriented dataset views over enriched Episodes.
 
 Takes enriched Episodes (with rewards attached by episode_runner) and produces
 filtered, stage-appropriate training datasets. Works with curriculum StageConfig
@@ -16,9 +16,8 @@ Does NOT own:
     - Reward computation (see envs.rewards)
     - Reward shaping (see training.reward_views)
     - Curriculum stage definitions (see training.curriculum)
-    - openpipe-art-ready record building (see training.openpipe_art_adapter)
+    - openpipe-art record building (see training.openpipe_art_adapter)
     - Episode serialization (see rollouts.serializers)
-    - Historical systems execution details (see systems/)
 """
 from __future__ import annotations
 
@@ -43,8 +42,8 @@ class TrainingRecord:
     """One episode formatted for training consumption.
 
     Contains the episode, its reward summary, and stage-specific metadata.
-    Downstream adapters (openpipe-art, SFT) consume this to produce their
-    format-specific records.
+    Downstream adapters (e.g. openpipe_art_adapter, SFT extraction) consume
+    this to produce their format-specific records.
     """
     episode: Episode
     reward_summary: EpisodeRewardSummary

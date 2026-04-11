@@ -1,14 +1,15 @@
 """
-openpipe-art-specific training consumption adapter.
+openpipe-art training adapter.
 
-Takes training trajectories from `rollouts.export_adapters` and adapts them for
-openpipe-art-oriented trainer ingestion: applies stage-specific reward views,
-prepares trainer-ready records, and handles the training-side contract.
+Takes training trajectories from ``rollouts.export_adapters`` and prepares
+them for openpipe-art consumption: applies stage-specific reward views,
+builds training-ready records, and handles serialization for the
+openpipe-art ingestion contract.
 
 Owns:
     - Applying training reward views to training trajectories
-    - Building trainer-ready records with stage-shaped rewards
-    - Batch preparation for openpipe-art-oriented training runs
+    - Building training-ready records with stage-shaped rewards
+    - Batch preparation for openpipe-art training runs
     - SFT-specific formatting for supervised fine-tuning stages
 
 Does NOT own:
@@ -18,7 +19,6 @@ Does NOT own:
     - Reward component weighting (see training.reward_views)
     - Curriculum stage definitions (see training.curriculum)
     - Dataset filtering (see training.datasets)
-    - Historical systems execution details (see systems/)
 """
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ from src.training.datasets import TrainingRecord
 
 @dataclass
 class OpenPipeArtTrainingRecord:
-    """A training trajectory with training-specific reward shaping applied."""
+    """A training trajectory with stage-specific reward shaping applied for openpipe-art."""
 
     trajectory: TrainingTrajectory
     stage: TrainingStage
@@ -83,7 +83,7 @@ def build_openpipe_art_training_record(
     training_record: TrainingRecord,
     stage_config: StageConfig,
 ) -> OpenPipeArtTrainingRecord:
-    """Convert a TrainingRecord into an openpipe-art-ready record."""
+    """Convert a TrainingRecord into an openpipe-art training record."""
 
     episode = training_record.episode
     reward_summary = training_record.reward_summary
@@ -107,7 +107,7 @@ def build_openpipe_art_training_batch(
     training_records: list[TrainingRecord],
     stage_config: StageConfig,
 ) -> list[OpenPipeArtTrainingRecord]:
-    """Convert a batch of TrainingRecords into openpipe-art-ready records."""
+    """Convert a batch of TrainingRecords into openpipe-art training records."""
 
     return [
         build_openpipe_art_training_record(record, stage_config)
@@ -116,7 +116,7 @@ def build_openpipe_art_training_batch(
 
 
 def training_record_to_jsonl(record: OpenPipeArtTrainingRecord) -> str:
-    """Serialize an openpipe-art training record to a single JSONL line."""
+    """Serialize a training record to a single JSONL line."""
 
     return json.dumps(record.to_dict())
 

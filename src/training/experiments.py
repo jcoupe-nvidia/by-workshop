@@ -15,9 +15,7 @@ Does NOT own:
     - Curriculum stage definitions (see training.curriculum)
     - Dataset construction or filtering (see training.datasets)
     - Reward computation or shaping (see envs.rewards, training.reward_views)
-    - openpipe-art-ready record building (see training.openpipe_art_adapter)
-    - Historical systems launch or config details (see systems/)
-    - Checkpoint management, if reintroduced later, in a separate systems layer
+    - openpipe-art record building (see training.openpipe_art_adapter)
 """
 from __future__ import annotations
 
@@ -266,7 +264,7 @@ def build_default_experiment_plan(
             "4-stage curriculum for training a tool-calling agent on the "
             "late-order recovery scenario (SO-10482). Progresses from SFT "
             "through short-horizon RL, full multi-turn RL, and robustness "
-            "training. Designed for the current openpipe-art-oriented workshop flow."
+            "training. Exports are consumed by openpipe-art for post-training."
         ),
     )
 

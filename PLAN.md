@@ -9,13 +9,6 @@
 - **Phase 6** is the next phase to implement, but it has been re-scoped to remove or quarantine outdated scale-out-systems-first assumptions.
 - **Phases 7-8** are pending.
 
-## Completed Phases To Reopen
-- **Phase 1** should be revisited for terminology and downstream ownership. The canonical episode and event contracts are still the right foundation, but their documentation should stop implying active earlier-rollout or scale-out-systems consumers. Revalidate the contracts against generic canonical trace serialization and `openpipe-art` export needs.
-- **Phase 2** should be revisited for runtime-facing wording and public surfaces. The NAT integration work remains valid, but any docs or adapters that describe the runtime as handing off to an earlier rollout or trainer stack should be updated to describe NAT + canonical traces + `openpipe-art`.
-- **Phase 3** should be revisited for reward and export framing. The explicit environment work is still core, but reward signals and environment outputs should now be described as `openpipe-art`-facing or generic training inputs rather than earlier trainer/export or rollout artifacts.
-- **Phase 4** should be revisited to remove the assumption that repo-local rollout code will later be replaced by an external rollout stack. The rollout package should instead be treated as the active canonical trace collection and serialization layer unless the stack changes again.
-- **Phase 5** should be revisited most deeply. The training layer is still the right place for datasets, reward views, and experiments, but its current earlier-trainer-stack naming and adapter assumptions should be replaced with an `openpipe-art`-first path. Keep those older references only as historical context for why those boundaries were introduced.
-
 ## Goal
 Reshape the repository from a flat, notebook-led demo into a small library with clear ownership boundaries while preserving the current scenario, deterministic tools, and end-to-end workshop flow described in [CLAUDE.md](CLAUDE.md). The active target stack is NAT for runtime orchestration, repo-owned canonical rollouts and traces, and `openpipe-art` for training-oriented exports and post-training discussion.
 

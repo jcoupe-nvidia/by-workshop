@@ -115,7 +115,16 @@ Representative dependencies include:
 
 ## Skills and tools
 
-Use a compact skill layer that composes deterministic tools into reusable, inspectable behaviors.
+Use **NeMo Agent Toolkit (NAT)** as the runtime-facing tool and skill architecture. Keep the notebook's skill layer compact, explicit, and inspectable.
+
+The runtime skill architecture should expose these canonical interfaces:
+
+- `list_skills` for discovery: skill name, description, tags, and discovered files.
+- `search_skills` for metadata search only: name, description, tags, declared assets, and filenames.
+- `get_skill` as the detailed read path, loading either the full `SKILL.md` body or a specific sidecar file by relative path.
+- `run_skill_command` for executing scripts present in the skills folder.
+
+These NAT-facing interfaces should own skill discovery, inspection, and execution surfaces. Keep them separate from the deterministic business tools used by the supply-chain scenario.
 
 Suggested skills:
 
@@ -130,8 +139,9 @@ Each skill should:
 - invoke one or more tools in an inspectable sequence
 - return structured intermediate outputs when useful
 - support evaluation of both skill selection and tool-use quality
+- live in a directory-backed skill package with `SKILL.md` plus optional sidecars or scripts when helpful
 
-Use a compact tool library, ideally **7 to 9** tools, such as:
+Use a compact deterministic business-tool library, ideally **7 to 9** tools, such as:
 
 - `get_order(order_id)`
 - `get_shipment_status(order_id)`
@@ -143,7 +153,7 @@ Use a compact tool library, ideally **7 to 9** tools, such as:
 - `score_recovery_options(options, objective)`
 - `recommend_action(context)` or direct final answer generation after scoring
 
-All tools should behave deterministically over small synthetic in-memory tables.
+All business tools should behave deterministically over small synthetic in-memory tables.
 
 ## Structured tool-call schema
 

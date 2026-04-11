@@ -1,8 +1,9 @@
 """
-Training-specific reward views over environment reward signals.
+Training-oriented reward views over environment reward signals.
 
-Bridges envs.rewards to what the trainer needs: stage-aware reward blending,
-component selection, and normalization for different training objectives.
+Bridges envs.rewards to what the training pipeline needs: stage-aware reward
+blending, component selection, and normalization for different training
+objectives (SFT cross-entropy, RL policy gradient, etc.).
 
 Owns:
     - Stage-aware reward blending (step vs trajectory weights per curriculum stage)
@@ -15,7 +16,6 @@ Does NOT own:
     - Curriculum stage definitions (see training.curriculum)
     - Training trajectory format (see rollouts.export_adapters)
     - Dataset construction or episode filtering (see training.datasets)
-    - Historical systems execution details (see systems/)
 """
 from __future__ import annotations
 
@@ -87,7 +87,7 @@ STAGE_REWARD_WEIGHTS: dict[TrainingStage, dict[str, float]] = {
 
 @dataclass
 class StepRewardView:
-    """Training-facing view of one step's reward, shaped by stage config.
+    """Training-oriented view of one step's reward, shaped by stage config.
 
     Unlike the raw RewardSignal from envs.rewards (which has fixed component
     weights), this view applies stage-specific weights and blending.
@@ -110,7 +110,7 @@ class StepRewardView:
 
 @dataclass
 class EpisodeRewardView:
-    """Training-facing view of an episode's rewards, shaped by stage config.
+    """Training-oriented view of an episode's rewards, shaped by stage config.
 
     Combines step-level and trajectory-level signals using the stage's
     blend weights (step_reward_weight, trajectory_reward_weight).
@@ -185,7 +185,7 @@ def build_episode_reward_view(
     stage_config: StageConfig,
     component_weights: dict[str, float] | None = None,
 ) -> EpisodeRewardView:
-    """Build a training-facing reward view for an episode.
+    """Build a training-oriented reward view for an episode.
 
     Takes the raw environment reward summary and applies stage-specific
     shaping: component weights, step/trajectory blending, and normalization.

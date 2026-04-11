@@ -29,8 +29,7 @@ Owns:
 Does NOT own:
     - Reward computation (see envs.rewards, training.reward_views)
     - Dataset construction (see training.datasets)
-    - openpipe-art adapter specifics (see training.openpipe_art_adapter)
-    - Historical systems execution details (see systems/)
+    - openpipe-art record building (see training.openpipe_art_adapter)
 """
 from __future__ import annotations
 

@@ -161,7 +161,6 @@ class Episode:
         - ``rollouts/`` serializes episodes for dataset production
         - ``training/`` builds reward views and dataset adapters over episodes
         - ``eval/`` computes offline metrics from episodes
-        - ``systems/`` never redefines or extends this schema
 
     Attributes:
         task_id:        Identifier for the task (e.g. "SO-10482").

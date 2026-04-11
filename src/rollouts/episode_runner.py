@@ -12,7 +12,7 @@ Does NOT own:
     - Tool implementations or prompt policy (see runtime/)
     - Environment state transitions or reward formulas (see envs/)
     - Serialization formats (see rollouts.serializers)
-    - Training dataset views or historical systems configuration (see training/, systems/)
+    - Training dataset views (see training/)
     - Offline evaluation metrics (see eval/)
 
 The episode runner is the integration point between runtime and environment.

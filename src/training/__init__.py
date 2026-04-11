@@ -1,24 +1,23 @@
 """
-openpipe-art-facing training semantics package.
+Training semantics package — openpipe-art is the primary downstream consumer.
 
 Owns:
-    - Trainer-facing datasets, reward views, and staged training progression
-    - openpipe-art-specific consumption and batch preparation
+    - Training-oriented datasets, reward views, and staged training progression
+    - openpipe-art record building and batch preparation
     - Experiment configuration and curriculum staging
     - SFT and RL record formatting
 
 Does NOT own:
     - Episode type definitions or serialization (see rollouts/)
     - Reward computation from environment transitions (see envs.rewards)
-    - Historical systems configuration details (see systems/)
     - Offline evaluation metrics (see eval/)
 
 Modules:
-    - curriculum:       4-stage training curriculum (SFT -> short RL -> full RL -> robustness)
-    - reward_views:     Stage-aware reward shaping over environment reward signals
-    - datasets:              Episode filtering and training dataset assembly per stage
-    - openpipe_art_adapter:  openpipe-art-ready record building and serialization
-    - experiments:           Experiment configs tying stages to training runs
+    - curriculum:           4-stage training curriculum (SFT -> short RL -> full RL -> robustness)
+    - reward_views:         Stage-aware reward shaping over environment reward signals
+    - datasets:             Episode filtering and training dataset assembly per stage
+    - openpipe_art_adapter: openpipe-art record building and serialization
+    - experiments:          Experiment configs tying stages to training runs
 """
 from src.training.curriculum import (
     TrainingStage,
