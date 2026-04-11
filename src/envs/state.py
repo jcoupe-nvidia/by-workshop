@@ -67,6 +67,21 @@ TOOL_TO_SUBGOAL: dict[str, Subgoal] = {
     "recommend_action": Subgoal.RECOMMENDATION_SYNTHESIZED,
 }
 
+# Sequence dependency graph: tool_name -> set of tools that must precede it.
+# This is the canonical, machine-checkable dependency contract owned by
+# envs/ as part of task truth.  Runtime and eval import from here.
+TOOL_DEPENDENCIES: dict[str, set[str]] = {
+    "get_order": set(),
+    "get_shipment_status": {"get_order"},
+    "get_inventory": {"get_order"},
+    "find_alternate_inventory": {"get_inventory"},
+    "get_transfer_eta": {"find_alternate_inventory"},
+    "get_supplier_expedite_options": {"get_order"},
+    "get_fulfillment_capacity": {"get_order"},
+    "score_recovery_options": {"find_alternate_inventory"},
+    "recommend_action": {"score_recovery_options"},
+}
+
 
 @dataclass
 class LateOrderEnvState:

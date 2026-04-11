@@ -200,9 +200,16 @@ def build_episode_reward_view(
         EpisodeRewardView ready for training consumption.
     """
     if component_weights is None:
-        component_weights = STAGE_REWARD_WEIGHTS.get(
-            stage_config.stage, REWARD_WEIGHTS,
-        )
+        # Prefer the stage_config.reward_config when it has component-level
+        # weights, so curriculum definitions directly control reward shaping.
+        # Fall back to STAGE_REWARD_WEIGHTS (module-level defaults) and then
+        # to the environment's base REWARD_WEIGHTS.
+        if stage_config.reward_config:
+            component_weights = stage_config.reward_config
+        else:
+            component_weights = STAGE_REWARD_WEIGHTS.get(
+                stage_config.stage, REWARD_WEIGHTS,
+            )
 
     # Shape each step reward
     step_views: list[StepRewardView] = []

@@ -39,18 +39,32 @@ from nemo_gym.base_resources_server import (
 
 from src.envs.rewards import EpisodeRewardSummary, RewardSignal
 from src.rollouts.trace_types import Episode, EpisodeMetrics
+from src.runtime.tracing import EpisodeRecorder
 
 
 # ---------------------------------------------------------------------------
 # NeMo Gym resource server (seed + verify protocol)
 # ---------------------------------------------------------------------------
 
-# Per-session environment state, keyed by stable session_id (UUID).
+@dataclass
+class _NemoGymSession:
+    """Per-session state holding both the environment and an EpisodeRecorder.
+
+    The EpisodeRecorder captures canonical Event records so that the NeMo Gym
+    training-time path produces the same inspectable Episode artifacts as the
+    interactive runtime. This closes the trace-contract gap identified in the
+    code review: verify() now emits canonical events, not just scalar rewards.
+    """
+    env: Any  # LateOrderRecoveryEnv
+    recorder: EpisodeRecorder
+
+
+# Per-session state, keyed by stable session_id (UUID).
 # Module-level dict rather than class attribute because SimpleResourcesServer
 # is a Pydantic BaseModel, and Pydantic treats underscore-prefixed class
 # attributes as ModelPrivateAttr descriptors — which breaks dict operations
 # when accessed on the class.
-_sessions: dict[str, Any] = {}
+_sessions: dict[str, _NemoGymSession] = {}
 
 
 class LateOrderResourceServer(SimpleResourcesServer):
@@ -78,6 +92,10 @@ class LateOrderResourceServer(SimpleResourcesServer):
         begins producing responses.  Returns a stable session_id so
         verify() can look up the correct environment even under
         concurrent rollout collection.
+
+        Each session gets both a LateOrderRecoveryEnv and an
+        EpisodeRecorder so that verify() emits canonical Event records
+        alongside scalar rewards.
         """
         # Import here to avoid circular dependency
         from src.envs.late_order_env import LateOrderRecoveryEnv
@@ -86,10 +104,17 @@ class LateOrderResourceServer(SimpleResourcesServer):
         # Default order for the workshop scenario
         env.reset("SO-10482")
 
+        recorder = EpisodeRecorder(
+            task_id="SO-10482",
+            task_prompt="NeMo Gym rollout for SO-10482",
+            model_id="nemo-gym-rollout",
+        )
+        recorder.record_user_task("NeMo Gym rollout for SO-10482")
+
         # Use a UUID so session identity is stable and unique across
         # concurrent rollout workers (fixes parallel-safety issue).
         session_id = str(uuid.uuid4())
-        _sessions[session_id] = env
+        _sessions[session_id] = _NemoGymSession(env=env, recorder=recorder)
 
         return BaseSeedSessionResponse(session_id=session_id)
 
@@ -101,17 +126,19 @@ class LateOrderResourceServer(SimpleResourcesServer):
         or a final message (terminal action).
 
         This method runs the same canonical validate -> repair -> reject
-        loop that the interactive runtime uses, so training-time traces
-        have the same semantics as run_agent_episode() traces. Invalid
-        calls, repairs, and rejects are recorded through the environment,
-        keeping rollout semantics aligned with the GRPO contract.
+        loop that the interactive runtime uses, and records each action
+        as a canonical Event via the session's EpisodeRecorder.  This
+        ensures training-time traces have the same semantics and
+        artifact format as run_agent_episode() traces.
         """
         from src.runtime.tools import TOOL_REGISTRY
         from src.runtime.schemas import validate_tool_call
         from src.runtime.fallbacks import try_repair, FallbackAction
 
-        # Look up the session-specific environment.
-        env = self._get_session_env(body)
+        # Look up the session-specific environment and recorder.
+        session = self._get_session(body)
+        env = session.env
+        recorder = session.recorder
 
         reward = 0.0
         response = body.response
@@ -149,10 +176,27 @@ class LateOrderResourceServer(SimpleResourcesServer):
                         # Validation failed — attempt repair
                         fb = try_repair(raw_output, TOOL_REGISTRY)
                         if fb.action == FallbackAction.REPAIRED and fb.repaired:
+                            recorder.record_repair_attempt(
+                                original_output=raw_output,
+                                repaired_output=fb.repaired,
+                                repairs_applied=fb.repairs_applied,
+                                succeeded=True,
+                            )
                             env.record_fallback_repair(succeeded=True)
                             result = validate_tool_call(fb.repaired, TOOL_REGISTRY)
                             was_repaired = True
                         elif fb.action == FallbackAction.REJECTED:
+                            recorder.record_repair_attempt(
+                                original_output=raw_output,
+                                repaired_output=None,
+                                repairs_applied=fb.repairs_applied,
+                                succeeded=False,
+                            )
+                            recorder.record_reject(
+                                reason=fb.rejection_reason or "Unrecoverable output",
+                                raw_model_output=raw_output,
+                                repairs_attempted=fb.repairs_applied,
+                            )
                             env.record_fallback_repair(succeeded=False)
                             env.record_fallback_reject()
                             # Record invalid action in the environment
@@ -168,6 +212,11 @@ class LateOrderResourceServer(SimpleResourcesServer):
 
                     # If still invalid after repair, record and continue
                     if hasattr(result, "error_type"):
+                        recorder.record_validation_error(
+                            error_type=result.error_type,
+                            message=result.message,
+                            raw_model_output=raw_output,
+                        )
                         step = env.record_invalid(
                             result.error_type,
                             result.message,
@@ -178,15 +227,24 @@ class LateOrderResourceServer(SimpleResourcesServer):
                             reward += step_reward.total
                         continue
 
-                    # Valid tool call — execute and step the environment
+                    # Valid tool call — record, execute, and step
                     valid_name = result.tool_name
                     valid_args = result.arguments
+                    recorder.record_tool_call(
+                        tool_name=valid_name,
+                        arguments=valid_args,
+                        thought=getattr(result, "thought", None),
+                        raw_model_output=raw_output,
+                    )
+                    recorder.increment_model_calls()
+
                     if valid_name in TOOL_REGISTRY:
                         fn, _params, _desc = TOOL_REGISTRY[valid_name]
                         try:
                             tool_result = fn(**valid_args)
                         except Exception:
                             tool_result = {"error": "execution_failed"}
+                        recorder.record_tool_result(valid_name, tool_result)
                         env.step(valid_name, valid_args, tool_result,
                                  was_repaired=was_repaired)
                         step_idx = len(env._step_rewards) - 1
@@ -208,6 +266,7 @@ class LateOrderResourceServer(SimpleResourcesServer):
                     except (json.JSONDecodeError, TypeError):
                         final_answer = {"action": "unknown", "raw": str(content)}
 
+                    recorder.record_terminal("final_answer", final_answer=final_answer)
                     env.terminate("final_answer", final_answer)
                     terminal_reward = env.get_terminal_reward()
                     if terminal_reward:
@@ -219,11 +278,11 @@ class LateOrderResourceServer(SimpleResourcesServer):
             reward=round(reward, 4),
         )
 
-    def _get_session_env(self, body: Any) -> Any:
-        """Look up the environment for the request's session.
+    def _get_session(self, body: Any) -> _NemoGymSession:
+        """Look up the session for the request.
 
         Uses session_id from the request when available. Falls back to
-        creating a fresh environment only when no session has been seeded
+        creating a fresh session only when no session has been seeded
         (e.g. in unit tests).
         """
         from src.envs.late_order_env import LateOrderRecoveryEnv
@@ -241,7 +300,25 @@ class LateOrderResourceServer(SimpleResourcesServer):
         # No session found — create a default one (demo-only path).
         env = LateOrderRecoveryEnv()
         env.reset("SO-10482")
-        return env
+        recorder = EpisodeRecorder(
+            task_id="SO-10482",
+            task_prompt="NeMo Gym rollout for SO-10482",
+            model_id="nemo-gym-rollout",
+        )
+        return _NemoGymSession(env=env, recorder=recorder)
+
+    @staticmethod
+    def get_session_episode(session_id: str) -> Episode | None:
+        """Retrieve the canonical Episode accumulated during a rollout session.
+
+        This is the primary way to inspect training-time traces in the
+        same format used by the interactive runtime and offline eval.
+        Returns None if the session_id is not found.
+        """
+        session = _sessions.get(session_id)
+        if session is None:
+            return None
+        return session.recorder.build_episode()
 
 
 def build_resource_server_config(

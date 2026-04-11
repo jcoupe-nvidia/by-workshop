@@ -178,7 +178,7 @@ def build_successful_episode() -> Episode:
         events=events,
         terminal=terminal,
         metrics=EpisodeMetrics(
-            total_steps=9,
+            total_steps=len(events),
             valid_tool_calls=9,
             invalid_tool_calls=0,
             repair_attempts=0,
@@ -348,7 +348,7 @@ def build_repair_episode() -> Episode:
         events=events,
         terminal=terminal,
         metrics=EpisodeMetrics(
-            total_steps=9,
+            total_steps=len(events),
             valid_tool_calls=9,
             invalid_tool_calls=1,
             repair_attempts=2,

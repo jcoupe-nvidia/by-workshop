@@ -32,7 +32,7 @@ from src.rollouts.trace_types import (
     ToolCallPayload,
     RepairAttemptPayload,
 )
-from src.runtime.tools import TOOL_DEPENDENCIES
+from src.envs.state import TOOL_DEPENDENCIES
 from src.envs.state import SUBGOAL_ORDER, TOOL_TO_SUBGOAL, Subgoal
 from src.envs.rewards import EXPECTED_ARGUMENTS, OPTIMAL_TOOL_SEQUENCE
 
@@ -297,24 +297,31 @@ def eval_recovery_quality(episode: Episode) -> DimensionScore:
 
 
 def eval_efficiency(episode: Episode) -> DimensionScore:
-    """How many steps did the agent take vs. the optimal trajectory?
+    """How many tool-call attempts did the agent make vs. the optimal trajectory?
 
     The optimal SO-10482 trajectory uses 9 tool calls (all tools once).
-    Extra steps (retries, invalid calls) reduce the score.
+    Extra attempts (retries, invalid calls) reduce the score.
+
+    Compares optimal tool-call count against total tool-call attempts
+    (valid + invalid) to keep units consistent.  metrics.total_steps is
+    the raw event count (which includes results, thoughts, etc.) and
+    should not be compared against a tool-call count.
     """
     optimal_count = len(OPTIMAL_TOOL_SEQUENCE)
     valid_calls = episode.metrics.valid_tool_calls
-    total_steps = episode.metrics.total_steps
+    invalid_calls = episode.metrics.invalid_tool_calls
+    total_attempts = valid_calls + invalid_calls
 
-    if total_steps == 0:
-        return DimensionScore("efficiency", 0.0, 1.0, "No steps taken.")
+    if total_attempts == 0:
+        return DimensionScore("efficiency", 0.0, 1.0, "No tool call attempts.")
 
-    # Ratio of optimal to actual (capped at 1.0)
-    # Using total_steps (not just valid) to penalize retries
-    score = min(1.0, optimal_count / total_steps) if total_steps > 0 else 0.0
+    # Ratio of optimal to actual attempts (capped at 1.0)
+    # Uses total tool-call attempts (valid + invalid) so the units match
+    score = min(1.0, optimal_count / total_attempts)
 
     details = (
-        f"{valid_calls} valid tool calls, {total_steps} total steps "
+        f"{valid_calls} valid tool calls, {invalid_calls} invalid, "
+        f"{total_attempts} total attempts "
         f"(optimal: {optimal_count}). "
         f"Efficiency ratio: {score:.2f}."
     )

@@ -279,16 +279,28 @@ class TestNemoGymSessionSafety:
     def _reset_sessions(self) -> None:
         self._get_sessions().clear()
 
-    def test_sessions_use_uuid_keys(self):
+    def _make_session(self, order_id: str = "SO-10482"):
+        """Create a _NemoGymSession wrapping env + recorder."""
         from src.envs.late_order_env import LateOrderRecoveryEnv
+        from src.envs.nemo_gym_adapter import _NemoGymSession
+        from src.runtime.tracing import EpisodeRecorder
 
+        env = LateOrderRecoveryEnv()
+        env.reset(order_id)
+        recorder = EpisodeRecorder(
+            task_id=order_id,
+            task_prompt=f"test rollout for {order_id}",
+            model_id="test",
+        )
+        return _NemoGymSession(env=env, recorder=recorder)
+
+    def test_sessions_use_uuid_keys(self):
         self._reset_sessions()
         sessions = self._get_sessions()
 
-        env = LateOrderRecoveryEnv()
-        env.reset("SO-10482")
+        session = self._make_session()
         session_id = str(uuid.uuid4())
-        sessions[session_id] = env
+        sessions[session_id] = session
 
         # The key should be a valid UUID, not an id() integer
         for key in sessions:
@@ -298,24 +310,20 @@ class TestNemoGymSessionSafety:
         self._reset_sessions()
 
     def test_multiple_sessions_distinct(self):
-        from src.envs.late_order_env import LateOrderRecoveryEnv
-
         self._reset_sessions()
         sessions = self._get_sessions()
 
-        env1 = LateOrderRecoveryEnv()
-        env1.reset("SO-10482")
+        session1 = self._make_session()
         id1 = str(uuid.uuid4())
-        sessions[id1] = env1
+        sessions[id1] = session1
 
-        env2 = LateOrderRecoveryEnv()
-        env2.reset("SO-10482")
+        session2 = self._make_session()
         id2 = str(uuid.uuid4())
-        sessions[id2] = env2
+        sessions[id2] = session2
 
         assert id1 != id2
-        assert sessions[id1] is env1
-        assert sessions[id2] is env2
+        assert sessions[id1].env is session1.env
+        assert sessions[id2].env is session2.env
 
         self._reset_sessions()
 
@@ -404,8 +412,9 @@ class TestVerifyAsyncPath:
 
     def _make_server(self):
         """Create a fresh server with a seeded session, return (server, session_id, env)."""
-        from src.envs.nemo_gym_adapter import LateOrderResourceServer
+        from src.envs.nemo_gym_adapter import LateOrderResourceServer, _NemoGymSession
         from src.envs.late_order_env import LateOrderRecoveryEnv
+        from src.runtime.tracing import EpisodeRecorder
 
         self._reset_sessions()
         sessions = self._get_sessions()
@@ -413,8 +422,13 @@ class TestVerifyAsyncPath:
         server = LateOrderResourceServer.__new__(LateOrderResourceServer)
         env = LateOrderRecoveryEnv()
         env.reset("SO-10482")
+        recorder = EpisodeRecorder(
+            task_id="SO-10482",
+            task_prompt="test rollout",
+            model_id="test",
+        )
         session_id = str(uuid.uuid4())
-        sessions[session_id] = env
+        sessions[session_id] = _NemoGymSession(env=env, recorder=recorder)
         return server, session_id, env
 
     def _cleanup(self):
@@ -570,8 +584,9 @@ class TestVerifyAsyncPath:
 
     def test_verify_uses_correct_session(self):
         """verify() should look up the environment by session_id."""
-        from src.envs.nemo_gym_adapter import LateOrderResourceServer
+        from src.envs.nemo_gym_adapter import LateOrderResourceServer, _NemoGymSession
         from src.envs.late_order_env import LateOrderRecoveryEnv
+        from src.runtime.tracing import EpisodeRecorder
 
         self._reset_sessions()
         sessions = self._get_sessions()
@@ -580,13 +595,15 @@ class TestVerifyAsyncPath:
         # Seed two sessions
         env1 = LateOrderRecoveryEnv()
         env1.reset("SO-10482")
+        rec1 = EpisodeRecorder(task_id="SO-10482", task_prompt="t", model_id="t")
         sid1 = str(uuid.uuid4())
-        sessions[sid1] = env1
+        sessions[sid1] = _NemoGymSession(env=env1, recorder=rec1)
 
         env2 = LateOrderRecoveryEnv()
         env2.reset("SO-10482")
+        rec2 = EpisodeRecorder(task_id="SO-10482", task_prompt="t", model_id="t")
         sid2 = str(uuid.uuid4())
-        sessions[sid2] = env2
+        sessions[sid2] = _NemoGymSession(env=env2, recorder=rec2)
 
         # Send a tool call to session 2 only
         req = _make_verify_request(

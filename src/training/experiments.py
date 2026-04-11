@@ -121,39 +121,33 @@ _SFT_HYPERPARAMS: dict[str, Any] = {
 }
 
 _SHORT_HORIZON_RL_HYPERPARAMS: dict[str, Any] = {
-    "method": "ppo",
+    "method": "grpo",
     "learning_rate": 1e-6,
     "batch_size": 4,
     "max_steps_per_episode": 3,
     "kl_penalty_coeff": 0.05,
-    "discount_factor": 0.99,
-    "gae_lambda": 0.95,
-    "ppo_epochs": 4,
-    "clip_range": 0.2,
+    "group_size": 4,
+    "baseline": "group_mean",
 }
 
 _FULL_MULTITURN_RL_HYPERPARAMS: dict[str, Any] = {
-    "method": "ppo",
+    "method": "grpo",
     "learning_rate": 5e-7,
     "batch_size": 4,
     "max_steps_per_episode": 12,
     "kl_penalty_coeff": 0.02,
-    "discount_factor": 0.99,
-    "gae_lambda": 0.95,
-    "ppo_epochs": 4,
-    "clip_range": 0.2,
+    "group_size": 4,
+    "baseline": "group_mean",
 }
 
 _ROBUSTNESS_HYPERPARAMS: dict[str, Any] = {
-    "method": "ppo",
+    "method": "grpo",
     "learning_rate": 3e-7,
     "batch_size": 4,
     "max_steps_per_episode": 15,
     "kl_penalty_coeff": 0.03,
-    "discount_factor": 0.99,
-    "gae_lambda": 0.95,
-    "ppo_epochs": 4,
-    "clip_range": 0.15,
+    "group_size": 4,
+    "baseline": "group_mean",
 }
 
 
@@ -217,9 +211,10 @@ def build_default_experiment_plan(
             reward_config=short_config.reward_config,
             checkpoint_from=f"{sft_output}/checkpoint_best",
             notes=(
-                "Short-horizon RL on 1-3 tool-call episodes. Dense "
+                "Short-horizon GRPO on 1-3 tool-call episodes. Dense "
                 "per-step rewards for tool selection and argument accuracy. "
-                "Higher KL penalty to stay close to SFT policy."
+                "Higher KL penalty to stay close to SFT policy. Group-relative "
+                "advantage computed over grouped trajectories for the same task."
             ),
         ),
         ExperimentConfig(
@@ -233,9 +228,10 @@ def build_default_experiment_plan(
             reward_config=full_config.reward_config,
             checkpoint_from=f"{short_output}/checkpoint_best",
             notes=(
-                "Full multi-turn RL on complete episodes (5-10 tool calls). "
+                "Full multi-turn GRPO on complete episodes (5-10 tool calls). "
                 "Sequence-aware rewards covering the full decision process: "
-                "diagnosis, assessment, alternate recovery, recommendation."
+                "diagnosis, assessment, alternate recovery, recommendation. "
+                "Group-relative advantage over grouped trajectories."
             ),
         ),
         ExperimentConfig(
@@ -263,8 +259,9 @@ def build_default_experiment_plan(
         description=(
             "4-stage curriculum for training a tool-calling agent on the "
             "late-order recovery scenario (SO-10482). Progresses from SFT "
-            "through short-horizon RL, full multi-turn RL, and robustness "
-            "training. Exports are consumed by openpipe-art for post-training."
+            "through short-horizon GRPO, full multi-turn GRPO, and robustness "
+            "training. RL stages use GRPO with group-relative advantage over "
+            "grouped trajectories. Exports are consumed by openpipe-art."
         ),
     )
 
