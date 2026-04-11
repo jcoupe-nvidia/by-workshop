@@ -17,7 +17,8 @@ Use `documents/RL_ARCHITECTURE.md` as the source of truth for the current respon
 7. Rebuilt offline evaluation on top of canonical traces and environment-owned semantics in `src/eval`.
 8. Demoted the notebook to a consumer of library code instead of an architecture source of truth.
 9. Aligned the public surfaces and documentation with the final layer split and target stack.
+10. Replaced the notebook's export-only training discussion with a real GRPO training run: rollout collection, trajectory group assembly with group-relative advantages, training step execution via openpipe-art, ATIF trace export for NAT inspection, and reward distribution visualization.
 
 ## Outcome
 
-The repository now reflects the architecture described in `CLAUDE.md` and `documents/RL_ARCHITECTURE.md` while preserving the late-order-recovery scenario, deterministic tools, and end-to-end workshop flow.
+The repository now reflects the architecture described in `CLAUDE.md` and `documents/RL_ARCHITECTURE.md` while preserving the late-order-recovery scenario, deterministic tools, and end-to-end workshop flow. The notebook demonstrates a complete GRPO training handoff including reward visualization and NAT-compatible trace artifacts.

@@ -54,6 +54,14 @@ from src.training.experiments import (
     build_default_experiment_plan,
     print_experiment_plan,
 )
+from src.training.grpo_notebook import (
+    GRPORunResult,
+    run_grpo_notebook,
+    collect_enriched_rollouts,
+    build_grpo_group_from_rollouts,
+    export_artifacts,
+    extract_reward_plot_data,
+)
 
 __all__ = [
     # curriculum
@@ -86,4 +94,11 @@ __all__ = [
     "ExperimentPlan",
     "build_default_experiment_plan",
     "print_experiment_plan",
+    # grpo_notebook
+    "GRPORunResult",
+    "run_grpo_notebook",
+    "collect_enriched_rollouts",
+    "build_grpo_group_from_rollouts",
+    "export_artifacts",
+    "extract_reward_plot_data",
 ]

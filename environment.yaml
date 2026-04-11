@@ -8,6 +8,7 @@ dependencies:
   - jupyterlab
   - ipykernel
   - pip
+  - matplotlib
   - pip:
       - requests
       - uv
