@@ -228,6 +228,7 @@ def episode_to_art_trajectory(
             "task_success": 1 if episode.is_complete else 0,
         },
         metadata={
+            "episode_id": episode.episode_id,
             "task_id": episode.task_id,
             "model_id": episode.model_id,
             "per_step_rewards": json.dumps(event_rewards),

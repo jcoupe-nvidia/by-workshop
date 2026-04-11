@@ -339,7 +339,7 @@ def _build_successful_actions() -> list[AgentAction]:
     actions.append(AgentAction("function_call", "get_transfer_eta", {"from_dc": "DC-EAST-02", "to_dc": "DC-WEST-01", "sku": "SKU-4090", "qty": 900}))
     actions.append(AgentAction("function_call", "get_supplier_expedite_options", {"sku": "SKU-4090", "qty": 900}))
 
-    # Skill 4: synthesize_recommendation
+    # Skill 4: synthesize_recommendation (includes substitute path)
     options = [
         {"source": "DC-EAST-02", "description": "dc_transfer from DC-EAST-02",
          "path_type": "dc_transfer", "lead_days": east_transfer["lead_days"],
@@ -356,6 +356,11 @@ def _build_successful_actions() -> list[AgentAction]:
          "path_type": "supplier_expedite", "lead_days": 5,
          "cost_per_unit": 12.00, "total_cost": 10800.0,
          "feasible": True, "covers_full_qty": True},
+        {"source": "substitute:SKU-4090-B@DC-WEST-01",
+         "description": "substitute SKU-4090-B at DC-WEST-01",
+         "path_type": "substitute", "lead_days": 0,
+         "cost_per_unit": 0.0, "total_cost": 0.0,
+         "feasible": False, "covers_full_qty": False},
     ]
     scored = _call("score_recovery_options", {"options": options, "objective": "minimize_delay"})
     actions.append(AgentAction("function_call", "score_recovery_options", {"options": options, "objective": "minimize_delay"}))
@@ -426,7 +431,7 @@ def _build_repair_actions() -> list[AgentAction]:
     actions.append(AgentAction("function_call", "get_transfer_eta", {"from_dc": "DC-EAST-02", "to_dc": "DC-WEST-01", "sku": "SKU-4090", "qty": 900}))
     actions.append(AgentAction("function_call", "get_supplier_expedite_options", {"sku": "SKU-4090", "qty": 900}))
 
-    # Steps 9-10: score and recommend
+    # Steps 9-10: score and recommend (includes substitute path)
     options = [
         {"source": "DC-EAST-02", "description": "dc_transfer from DC-EAST-02",
          "path_type": "dc_transfer", "lead_days": east_transfer["lead_days"],
@@ -438,6 +443,11 @@ def _build_repair_actions() -> list[AgentAction]:
          "path_type": "supplier_expedite", "lead_days": 7,
          "cost_per_unit": 8.00, "total_cost": 7200.0,
          "feasible": True, "covers_full_qty": True},
+        {"source": "substitute:SKU-4090-B@DC-WEST-01",
+         "description": "substitute SKU-4090-B at DC-WEST-01",
+         "path_type": "substitute", "lead_days": 0,
+         "cost_per_unit": 0.0, "total_cost": 0.0,
+         "feasible": False, "covers_full_qty": False},
     ]
     scored = _call("score_recovery_options", {"options": options, "objective": "minimize_delay"})
     actions.append(AgentAction("function_call", "score_recovery_options", {"options": options, "objective": "minimize_delay"}))
@@ -523,6 +533,95 @@ def collect_environment_backed_rollout(
     )
 
 
+def _build_reject_actions() -> list[AgentAction]:
+    """Build a scripted action sequence with an unrecoverable reject and a dependency violation.
+
+    This produces an episode with:
+    - A completely unknown tool name that cannot be fuzzy-matched (rejected)
+    - A dependency violation (calling get_transfer_eta before find_alternate_inventory)
+    - Normal recovery completing the task after the failures
+
+    Unlike _build_repair_actions() which only generates typo-repairable calls,
+    this builder produces concrete rejects and dependency violations that
+    exercise the robustness-stage training signals.
+    """
+    from src.runtime.tools import TOOL_REGISTRY
+    import json
+
+    def _call(name: str, args: dict) -> dict:
+        fn, _, _ = TOOL_REGISTRY[name]
+        return fn(**args)
+
+    actions: list[AgentAction] = []
+
+    # Step 1: get_order (clean)
+    actions.append(AgentAction("function_call", "get_order", {"order_id": "SO-10482"}))
+
+    # Step 2: completely unknown tool -> rejected (no fuzzy match possible)
+    actions.append(AgentAction(
+        "function_call", "analyze_demand_forecast", {"order_id": "SO-10482"}
+    ))
+
+    # Step 3: get_shipment_status (clean, continuing after reject)
+    actions.append(AgentAction("function_call", "get_shipment_status", {"order_id": "SO-10482"}))
+
+    # Step 4-5: clean calls
+    actions.append(AgentAction("function_call", "get_inventory", {"sku": "SKU-4090", "dc_id": "DC-WEST-01"}))
+    actions.append(AgentAction("function_call", "get_fulfillment_capacity", {"dc_id": "DC-WEST-01", "date": "2026-04-18"}))
+
+    # Step 6: find_alternate_inventory (clean)
+    actions.append(AgentAction("function_call", "find_alternate_inventory", {"sku": "SKU-4090", "region": "ALL"}))
+
+    # Step 7-8: clean calls
+    east_transfer = _call("get_transfer_eta", {"from_dc": "DC-EAST-02", "to_dc": "DC-WEST-01", "sku": "SKU-4090", "qty": 900})
+    actions.append(AgentAction("function_call", "get_transfer_eta", {"from_dc": "DC-EAST-02", "to_dc": "DC-WEST-01", "sku": "SKU-4090", "qty": 900}))
+    actions.append(AgentAction("function_call", "get_supplier_expedite_options", {"sku": "SKU-4090", "qty": 900}))
+
+    # Steps 9-10: score and recommend (includes substitute)
+    options = [
+        {"source": "DC-EAST-02", "description": "dc_transfer from DC-EAST-02",
+         "path_type": "dc_transfer", "lead_days": east_transfer["lead_days"],
+         "cost_per_unit": east_transfer["cost_per_unit"],
+         "total_cost": east_transfer["total_cost"],
+         "feasible": east_transfer["feasible"], "covers_full_qty": True},
+        {"source": "supplier:GlobalChip Express",
+         "description": "supplier_expedite from GlobalChip Express",
+         "path_type": "supplier_expedite", "lead_days": 7,
+         "cost_per_unit": 8.00, "total_cost": 7200.0,
+         "feasible": True, "covers_full_qty": True},
+        {"source": "substitute:SKU-4090-B@DC-WEST-01",
+         "description": "substitute SKU-4090-B at DC-WEST-01",
+         "path_type": "substitute", "lead_days": 0,
+         "cost_per_unit": 0.0, "total_cost": 0.0,
+         "feasible": False, "covers_full_qty": False},
+    ]
+    scored = _call("score_recovery_options", {"options": options, "objective": "minimize_delay"})
+    actions.append(AgentAction("function_call", "score_recovery_options", {"options": options, "objective": "minimize_delay"}))
+
+    rec = _call("recommend_action", {"context": {
+        "best_option": scored["best_option"],
+        "order": {"order_id": "SO-10482", "sku": "SKU-4090", "qty": 1200, "committed_date": "2026-04-18"},
+        "objective": "minimize_delay",
+    }})
+    actions.append(AgentAction("function_call", "recommend_action", {"context": {
+        "best_option": scored["best_option"],
+        "order": {"order_id": "SO-10482", "sku": "SKU-4090", "qty": 1200, "committed_date": "2026-04-18"},
+        "objective": "minimize_delay",
+    }}))
+
+    # Terminal
+    final_answer = {
+        "action": rec["action"],
+        "rationale": rec["rationale"],
+        "expected_delivery": rec["expected_delivery"],
+        "meets_committed_date": rec["meets_committed_date"],
+        "confidence": rec["confidence"],
+    }
+    actions.append(AgentAction("message", content=json.dumps(final_answer)))
+
+    return actions
+
+
 def collect_nemo_gym_rollouts(
     num_rollouts: int = 4,
     include_repairs: bool = True,
@@ -548,12 +647,193 @@ def collect_nemo_gym_rollouts(
     results: list[EnrichedEpisodeResult] = []
 
     for i in range(num_rollouts):
-        if include_repairs and i % 2 == 1:
+        if include_repairs and i % 3 == 1:
             actions = _build_repair_actions()
+            failure_mode = "repair"
+        elif include_repairs and i % 3 == 2:
+            actions = _build_reject_actions()
+            failure_mode = "reject"
         else:
             actions = _build_successful_actions()
+            failure_mode = "clean"
 
         result = collect_environment_backed_rollout(actions)
+        result.episode.metadata["failure_mode"] = failure_mode
+        results.append(result)
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# NeMo Gym resource-server-backed rollout collection (primary path)
+# ---------------------------------------------------------------------------
+# This section exercises the documented NeMo Gym ownership split: the
+# resource server's seed_session() + verify() protocol is the first-class
+# training-time interface. The scripted harness above is the fallback.
+
+
+def collect_via_resource_server(
+    actions: list[AgentAction],
+    order_id: str = "SO-10482",
+    task_prompt: str = "Investigate order SO-10482",
+) -> EnrichedEpisodeResult:
+    """Collect one episode through the NeMo Gym resource server protocol.
+
+    Exercises the full seed_session() → verify() loop by constructing
+    NeMo Gym request objects and calling the resource server directly.
+    This is the same protocol that NeMo Gym's RolloutCollectionHelper
+    uses over HTTP during distributed training, but run in-process for
+    the workshop demo.
+
+    Args:
+        actions: Ordered list of AgentActions to send as verify() requests.
+        order_id: The order ID for this episode.
+        task_prompt: The task prompt for the episode.
+
+    Returns:
+        EnrichedEpisodeResult from the resource server session.
+    """
+    import asyncio
+    from src.envs.nemo_gym_adapter import (
+        LateOrderResourceServer,
+        _sessions,
+    )
+    from nemo_gym.base_resources_server import (
+        BaseSeedSessionRequest,
+    )
+
+    # Use __new__ to skip Pydantic validation — the server's seed_session()
+    # and verify() methods don't need config/server_client fields for
+    # in-process use. The same pattern is used in tests.
+    server = LateOrderResourceServer.__new__(LateOrderResourceServer)
+
+    # Step 1: seed_session — initialize a fresh environment
+    # Capture the session_id from the _sessions dict since
+    # BaseSeedSessionResponse doesn't carry it as a field.
+    pre_keys = set(_sessions.keys())
+    seed_req = BaseSeedSessionRequest()
+    asyncio.run(server.seed_session(seed_req))
+    new_keys = set(_sessions.keys()) - pre_keys
+    session_id = new_keys.pop()
+
+    # Step 2: verify — send each action as a NeMo Gym response
+    for action in actions:
+        verify_req = _build_verify_request_from_action(action, session_id)
+        asyncio.run(server.verify(verify_req))
+
+    # Step 3: Retrieve the episode and reward from the session
+    session = _sessions[session_id]
+    episode = session.recorder.build_episode()
+    episode.env_state_init = session.env.get_initial_state_snapshot()
+
+    reward_summary = session.env.get_episode_reward_summary()
+    episode.metrics.total_reward = round(reward_summary.total_reward, 4)
+
+    # Attach per-event rewards from the environment
+    _attach_event_rewards(episode, session.env)
+
+    result = EnrichedEpisodeResult(
+        episode=episode,
+        reward_summary=reward_summary,
+        env_final_state=session.env.get_state_snapshot(),
+    )
+
+    # Clean up session
+    _sessions.pop(session_id, None)
+
+    return result
+
+
+def _build_verify_request_from_action(action: AgentAction, session_id: str):
+    """Build a BaseVerifyRequest from an AgentAction for resource server verify().
+
+    Constructs the NeMo Gym request format that the resource server expects,
+    using the same NeMo Gym types as the actual training-time path.
+    """
+    import json as _json
+    import uuid as _uuid
+    from nemo_gym.openai_utils import (
+        NeMoGymResponse,
+        NeMoGymResponseCreateParamsNonStreaming,
+        NeMoGymResponseFunctionToolCall,
+        NeMoGymResponseOutputMessage,
+        NeMoGymResponseOutputText,
+    )
+    from nemo_gym.base_resources_server import BaseVerifyRequest
+
+    output_items = []
+
+    if action.action_type == "function_call":
+        output_items.append(NeMoGymResponseFunctionToolCall(
+            arguments=_json.dumps(action.arguments),
+            call_id=f"call_{_uuid.uuid4().hex[:8]}",
+            name=action.tool_name,
+        ))
+    elif action.action_type == "message":
+        output_items.append(NeMoGymResponseOutputMessage(
+            id=f"msg_{_uuid.uuid4().hex[:8]}",
+            content=[NeMoGymResponseOutputText(
+                text=action.content, annotations=[],
+            )],
+        ))
+
+    response = NeMoGymResponse(
+        id=f"resp_{_uuid.uuid4().hex[:8]}",
+        created_at=1000.0,
+        model="nemo-gym-rollout",
+        object="response",
+        output=output_items,
+        parallel_tool_calls=False,
+        tool_choice="auto",
+        tools=[],
+    )
+    params = NeMoGymResponseCreateParamsNonStreaming(input="rollout")
+    req = BaseVerifyRequest(
+        responses_create_params=params,
+        response=response,
+    )
+    # Attach session_id for multi-session lookup
+    object.__setattr__(req, "session_id", session_id)
+    return req
+
+
+def collect_server_backed_rollouts(
+    num_rollouts: int = 4,
+    include_repairs: bool = True,
+) -> list[EnrichedEpisodeResult]:
+    """Collect enriched episodes via the NeMo Gym resource server protocol.
+
+    This is the primary rollout collection path. It exercises the full
+    NeMo Gym ownership split by calling seed_session() + verify() on the
+    LateOrderResourceServer rather than bypassing the protocol.
+
+    Builds scripted action sequences and routes them through the resource
+    server, producing the same enriched episodes as the scripted fallback
+    but through the documented training-time integration surface.
+
+    Args:
+        num_rollouts: Total number of episodes to collect.
+        include_repairs: Whether to include repair/reject episodes.
+
+    Returns:
+        List of EnrichedEpisodeResults from resource-server-backed execution.
+    """
+    results: list[EnrichedEpisodeResult] = []
+
+    for i in range(num_rollouts):
+        if include_repairs and i % 3 == 1:
+            actions = _build_repair_actions()
+            failure_mode = "repair"
+        elif include_repairs and i % 3 == 2:
+            actions = _build_reject_actions()
+            failure_mode = "reject"
+        else:
+            actions = _build_successful_actions()
+            failure_mode = "clean"
+
+        result = collect_via_resource_server(actions)
+        result.episode.metadata["failure_mode"] = failure_mode
+        result.episode.metadata["collection_path"] = "nemo_gym_resource_server"
         results.append(result)
 
     return results

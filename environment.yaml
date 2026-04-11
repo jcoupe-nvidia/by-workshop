@@ -15,4 +15,4 @@ dependencies:
       - nvidia-nat
       - nemo-gym
       - openai==2.6.1
-      - openpipe-art==0.5.6
+      - openpipe-art>=0.6.0

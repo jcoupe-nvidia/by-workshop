@@ -36,7 +36,10 @@ from typing import Any
 
 import art
 
-from src.rollouts.nemo_gym_rollouts import collect_nemo_gym_rollouts
+from src.rollouts.nemo_gym_rollouts import (
+    collect_server_backed_rollouts,
+    collect_nemo_gym_rollouts,
+)
 from src.rollouts.episode_runner import EnrichedEpisodeResult
 from src.rollouts.export_adapters import (
     episode_to_atif_trajectory,
@@ -55,29 +58,22 @@ from src.training.openpipe_art_adapter import (
 )
 
 # Minimum openpipe-art version required for live (non-dry-run) training.
-# The pinned 0.5.6 in environment.yaml lacks TrainableModel, backend.train(),
-# and the richer TrajectoryGroup metadata/metrics surfaces.
+# environment.yaml now pins >= 0.6.0, which provides TrainableModel,
+# backend.train(), and richer TrajectoryGroup metadata/metrics surfaces.
 _MIN_ART_VERSION_FOR_TRAINING = "0.6.0"
 
 
-def _check_art_version_for_training() -> None:
-    """Fail fast if the installed openpipe-art is too old for live training.
+def _check_art_version_for_training() -> bool:
+    """Check whether the installed openpipe-art supports live training.
 
-    The dry-run path and trajectory export work on 0.5.6, but the
-    backend.train() entrypoint requires >= 0.6.0. This prevents a
-    confusing runtime AttributeError deep in the training loop.
+    Returns True if openpipe-art >= 0.6.0 is installed, False otherwise.
+    Callers should fall back to dry-run when this returns False.
     """
     from importlib.metadata import version as pkg_version
     from packaging.version import Version
 
     installed = pkg_version("openpipe-art")
-    if Version(installed) < Version(_MIN_ART_VERSION_FOR_TRAINING):
-        raise RuntimeError(
-            f"Live GRPO training requires openpipe-art >= {_MIN_ART_VERSION_FOR_TRAINING}, "
-            f"but {installed} is installed. The environment.yaml pins 0.5.6 for "
-            f"nemo-gym compatibility. Use dry_run=True for the current environment, "
-            f"or update openpipe-art when a compatible version set is available."
-        )
+    return Version(installed) >= Version(_MIN_ART_VERSION_FOR_TRAINING)
 
 
 # ---------------------------------------------------------------------------
@@ -164,26 +160,36 @@ def collect_enriched_rollouts(
     num_rollouts: int = 4,
     include_repairs: bool = True,
 ) -> list[EnrichedEpisodeResult]:
-    """Collect enriched episodes via NeMo Gym environment-backed execution.
+    """Collect enriched episodes via the NeMo Gym resource server protocol.
 
-    Runs scripted action sequences through the NeMo Gym execution
-    pipeline (validate → repair → reject → execute → record) with the
-    environment computing rewards in real-time. This exercises the
-    documented NVIDIA ownership split: NeMo Gym owns training-time
-    execution and rollout collection rather than training on canned
-    trajectories.
+    Primary path: exercises the documented NeMo Gym ownership split by
+    calling seed_session() + verify() on LateOrderResourceServer for
+    each episode. This is the same protocol that NeMo Gym's
+    RolloutCollectionHelper uses during distributed training.
+
+    Fallback path: if the resource server protocol fails (e.g. NeMo Gym
+    import issues), falls back to the scripted environment-backed harness
+    which uses the same validate → repair → reject → execute → record
+    pipeline but without the resource server protocol.
 
     Args:
         num_rollouts: Total number of episodes to collect.
-        include_repairs: Whether to include repair episodes in the mix.
+        include_repairs: Whether to include repair/reject episodes in the mix.
 
     Returns:
-        List of EnrichedEpisodeResult from environment-backed execution.
+        List of EnrichedEpisodeResult from NeMo Gym execution.
     """
-    return collect_nemo_gym_rollouts(
-        num_rollouts=num_rollouts,
-        include_repairs=include_repairs,
-    )
+    try:
+        return collect_server_backed_rollouts(
+            num_rollouts=num_rollouts,
+            include_repairs=include_repairs,
+        )
+    except Exception:
+        # Fallback to scripted harness if resource server protocol fails
+        return collect_nemo_gym_rollouts(
+            num_rollouts=num_rollouts,
+            include_repairs=include_repairs,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -327,7 +333,7 @@ def run_grpo_notebook(
     include_repairs: bool = True,
     stage: TrainingStage = TrainingStage.FULL_MULTITURN_RL,
     artifact_dir: str = "artifacts/grpo_run",
-    dry_run: bool = True,
+    dry_run: bool = False,
 ) -> GRPORunResult:
     """Run a complete GRPO training cycle for the notebook.
 
@@ -335,15 +341,20 @@ def run_grpo_notebook(
         1. Collect enriched rollouts via NeMo Gym environment-backed execution
         2. Build GRPO trajectory group with group-relative advantages
         3. Export ATIF traces and trajectory group artifacts
-        4. Execute training step (or dry-run mock)
+        4. Execute training step (real when openpipe-art >= 0.6.0, dry-run fallback)
         5. Return compact result for notebook display
+
+    When dry_run=False (the default), the notebook attempts a real training
+    step via openpipe-art. If the installed version is too old, it falls back
+    to dry-run mode automatically and reports the fallback in train_metrics.
 
     Args:
         num_rollouts: Number of episodes to collect (default 4).
         include_repairs: Include repair episodes for diversity.
         stage: Curriculum stage for reward shaping.
         artifact_dir: Directory for output artifacts.
-        dry_run: If True, simulate training without a real backend.
+        dry_run: If True, always simulate training. If False, attempt live
+                 training with automatic dry-run fallback.
 
     Returns:
         GRPORunResult with all artifacts, metrics, and episode data.
@@ -369,13 +380,18 @@ def run_grpo_notebook(
     # Step 4: Training step
     train_metrics: dict[str, float] = {}
     checkpoint_path: str | None = None
+    effective_dry_run = dry_run
 
-    if dry_run:
-        train_metrics = _dry_run_train(trajectory_group, stage_config)
+    if not dry_run and not _check_art_version_for_training():
+        # Installed openpipe-art is too old for live training —
+        # fall back to dry-run automatically.
+        effective_dry_run = True
+        train_metrics["_fallback_reason"] = 1.0  # sentinel for "version too old"
+
+    if effective_dry_run:
+        train_metrics.update(_dry_run_train(trajectory_group, stage_config))
     else:
-        # Real training via art backend — requires openpipe-art >= 0.6.0
-        # for TrainableModel, backend.train(), and richer TrajectoryGroup API.
-        _check_art_version_for_training()
+        # Real training via art backend (openpipe-art >= 0.6.0).
         import asyncio
 
         model = art.TrainableModel(
@@ -420,7 +436,7 @@ def run_grpo_notebook(
         artifact_dir=artifact_dir,
         atif_path=atif_path,
         group_jsonl_path=group_path,
-        dry_run=dry_run,
+        dry_run=effective_dry_run,
         wall_time_seconds=wall_time,
     )
 

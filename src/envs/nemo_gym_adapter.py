@@ -342,6 +342,7 @@ class NemoGymResultRow:
     in the "response" dict for inspection.
     """
     # Identity
+    episode_id: str
     order_id: str
     agent_ref: dict[str, str]
 
@@ -374,6 +375,7 @@ class NemoGymResultRow:
     def to_dict(self) -> dict[str, Any]:
         """Convert to a flat dict suitable for nemo-gym JSONL output."""
         d: dict[str, Any] = {
+            "episode_id": self.episode_id,
             "agent_ref": self.agent_ref,
             "order_id": self.order_id,
             "total_reward": self.total_reward,
@@ -449,6 +451,7 @@ def episode_to_nemo_gym_row(
     }
 
     return NemoGymResultRow(
+        episode_id=episode.episode_id,
         order_id=episode.task_id,
         agent_ref={"name": agent_name},
         total_reward=round(reward_summary.total_reward, 4),

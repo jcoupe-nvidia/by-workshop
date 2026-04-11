@@ -56,7 +56,11 @@ class EpisodeRecorder:
         task_prompt: str,
         model_id: str = "",
         env_state_init: dict[str, Any] | None = None,
+        episode_id: str | None = None,
     ) -> None:
+        from src.rollouts.trace_types import _mint_episode_id
+
+        self.episode_id = episode_id or _mint_episode_id()
         self.task_id = task_id
         self.task_prompt = task_prompt
         self.model_id = model_id
@@ -239,6 +243,7 @@ class EpisodeRecorder:
         )
 
         return Episode(
+            episode_id=self.episode_id,
             task_id=self.task_id,
             task_prompt=self.task_prompt,
             model_id=self.model_id,
