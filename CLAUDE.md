@@ -9,7 +9,7 @@ This repository contains an MVP notebook for a workshop on agentic supply-chain 
 - structured tool calling for Nemotron-style models
 - fallback parsing for malformed or partially structured outputs
 - sequence-sensitive evaluation
-- training-oriented patterns aligned with `openpipe-art`, with historical references to earlier trainer-facing, rollout-shaping, and scale-out systems framing where that context helps explain the evolution of the design
+- clear ownership boundaries across NAT runtime, NeMo Gym rollout collection, repo-owned evaluation, and `openpipe-art` training
 
 This is a pedagogical artifact, not a production system. The goal is to show concrete patterns, tradeoffs, and evaluation methods in a form that is easy to present live.
 
@@ -57,8 +57,19 @@ The agent should evaluate options such as:
 - Favor clarity over completeness.
 - Keep the logic explicit and easy to follow.
 - Separate scenario data, skills, tools, prompting, parsing, execution, fallback handling, and evaluation.
+- Keep scenario-specific contracts repo-owned even when execution surfaces map to NAT, NeMo Gym, and `openpipe-art`.
 - Avoid hidden magic, deep abstraction layers, unnecessary async, excessive visualization, large synthetic datasets, and production-grade packaging.
 - Prefer short cells, typed Python where practical, explicit comments, and predictable helper functions.
+
+## Ownership model
+
+Use these ownership guardrails consistently:
+
+- the repo owns scenario contracts such as deterministic business tools, trace schemas, task semantics, and evaluation logic
+- **NeMo Agent Toolkit (NAT)** owns the interactive runtime surface: tool registration, structured tool calls, skill discovery, and single-episode execution
+- **NeMo Gym** owns training-time environment verification and rollout execution over repo-defined contracts
+- **`openpipe-art`** owns trainer-facing dataset views, reward views, curriculum, and training handoff
+- `eval/` stays repo-owned and should consume NAT traces, NeMo Gym environment facts, and `openpipe-art` artifacts rather than re-implementing them
 
 ## Notebook requirements
 
@@ -115,7 +126,7 @@ Representative dependencies include:
 
 ## Skills and tools
 
-Use **NeMo Agent Toolkit (NAT)** as the runtime-facing tool and skill architecture. Keep the notebook's skill layer compact, explicit, and inspectable.
+Use **NeMo Agent Toolkit (NAT)** as the runtime-facing tool and skill architecture for interactive and demo execution. Keep the notebook's skill layer compact, explicit, and inspectable.
 
 The runtime skill architecture should expose these canonical interfaces:
 
@@ -124,7 +135,7 @@ The runtime skill architecture should expose these canonical interfaces:
 - `get_skill` as the detailed read path, loading either the full `SKILL.md` body or a specific sidecar file by relative path.
 - `run_skill_command` for executing scripts present in the skills folder.
 
-These NAT-facing interfaces should own skill discovery, inspection, and execution surfaces. Keep them separate from the deterministic business tools used by the supply-chain scenario.
+These NAT-facing interfaces should own skill discovery, inspection, and execution surfaces. Keep them separate from the deterministic business tools used by the supply-chain scenario and from NeMo Gym-owned training rollout execution.
 
 Suggested skills:
 
@@ -177,12 +188,14 @@ The notebook must define a canonical Nemotron-style tool-call format.
 These are the active requirements for the notebook design:
 
 - **NeMo Agent Toolkit (NAT)**
-  - as the runtime-oriented reference for tool registration, structured tool calls, and inspectable agent execution
+  - as the runtime-oriented reference for tool registration, structured tool calls, inspectable agent execution, and demo-time visualization surfaces
+- **NeMo Gym**
+  - as the training-time reference for environment verification, rollout collection, and scalable multi-turn episode execution over repo-defined contracts
 - **`openpipe-art`**
-  - as the primary training-oriented reference for trajectory export, reward shaping discussion, evaluator outputs, and downstream post-training alignment
+  - as the primary training-oriented reference for trajectory export, reward shaping discussion, and downstream post-training alignment
 
 
-Integration should stay narrow, local, and demonstrative. Prefer one concrete `openpipe-art` export or handoff example rather than building a full training or platform stack inside the notebook.
+Integration should stay narrow, local, and demonstrative. Prefer NAT for demo/runtime behavior, NeMo Gym for training-time rollout collection, and one concrete `openpipe-art` export or handoff example rather than building a full training or platform stack inside the notebook.
 
 ## Target deployment environment
 

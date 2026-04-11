@@ -4,8 +4,9 @@
 
 Refactor the repository so it cleanly separates:
 
-- **NAT** for single-episode agent runtime behavior
-- **repo-owned rollouts and canonical traces** for multi-turn episode collection
+- **NAT** for interactive single-episode agent runtime behavior
+- **NeMo Gym** for training-time environments and rollout collection
+- **repo-owned canonical contracts and traces** shared across integrations
 - **`openpipe-art`** for training-oriented datasets, rewards, and post-training flows
 
 The result should preserve the workshop/demo value of the repo while making it structurally ready for real multi-turn training and export workflows.
@@ -18,11 +19,11 @@ Use these boundaries consistently.
 
 | Layer | Owns | Does not own |
 | --- | --- | --- |
-| `runtime/` with NAT | tool definitions, tool schemas, prompt/runtime policy, skill discovery/loading/execution, single-episode agent behavior, trace emission | rollout scheduling, reward design, trainer logic, deployment topology |
-| `envs/` | task state, deterministic transitions, action validity, terminal conditions, reward-relevant task facts | runtime orchestration, rollout infrastructure, trainer logic |
-| `rollouts/` | episode running, multi-turn trace capture, serialization, retry/failure representation, dataset production from canonical traces | tool semantics, task logic, training algorithms |
+| `runtime/` with NAT | tool definitions, tool schemas, prompt/runtime policy, skill discovery/loading/execution, interactive single-episode agent behavior, trace emission | training rollout scheduling, reward design, trainer logic, deployment topology |
+| `envs/` aligned to NeMo Gym | task state, deterministic transitions, action validity, terminal conditions, reward-relevant task facts, verification-ready environment semantics | runtime orchestration, rollout infrastructure policy, trainer logic |
+| `rollouts/` | canonical multi-turn trace capture, serialization, retry/failure representation, adapters between repo contracts and NeMo Gym rollout collection | tool semantics, task logic, training algorithms, ownership of a competing rollout framework |
 | `training/` with `openpipe-art` | dataset adapters, reward views, curriculum, experiment definitions, trainer-facing post-training logic | runtime policy, tool schemas, rollout orchestration, deployment details |
-| `eval/` | offline metrics, reports, regression analysis | environment transitions, runtime policy, trainer behavior |
+| `eval/` | offline metrics, reports, regression analysis over canonical traces, NeMo Gym facts, and `openpipe-art` artifacts | environment transitions, runtime policy, trainer behavior |
 
 Historical references to older rollout or trainer-facing stacks may remain in docs, but they are not the active implementation target.
 
@@ -32,11 +33,11 @@ Historical references to older rollout or trainer-facing stacks may remain in do
 
 ### 1. One layer per concern
 
-- `runtime/`: single-episode orchestration
-- `envs/`: task semantics, validity, and transitions
-- `rollouts/`: canonical multi-turn collection and serialization
+- `runtime/`: NAT-aligned interactive single-episode orchestration
+- `envs/`: task semantics, validity, transitions, and NeMo Gym-aligned verification surfaces
+- `rollouts/`: canonical trace capture, serialization, and NeMo Gym adapters
 - `training/`: trainer-facing datasets and reward views
-- `eval/`: offline benchmarking and reporting
+- `eval/`: repo-owned offline benchmarking and reporting across runtime, environment, and training artifacts
 
 ### 2. No overlap in ownership
 
@@ -94,7 +95,7 @@ Expose these canonical interfaces from the runtime layer:
 
 ### `envs/`
 
-Explicit task environment package for:
+Explicit task environment package, designed to map cleanly onto NeMo Gym environment and verification surfaces, for:
 
 - episode state
 - deterministic transitions
@@ -106,10 +107,10 @@ Explicit task environment package for:
 
 ### `rollouts/`
 
-Canonical rollout package for:
+Canonical trace and rollout-adapter package for:
 
 - episode runner integration
-- rollout orchestration
+- adapters into NeMo Gym rollout collection
 - trace serialization
 - retry/failure representation
 - stable multi-turn episode capture
@@ -134,8 +135,9 @@ Offline evaluation package for:
 - summaries
 - trajectory analysis
 - regression reports
+- consumption of NAT traces, NeMo Gym environment facts, and `openpipe-art` artifacts
 
-Keep `eval/` separate from `envs/`: the environment owns task semantics, while evaluation owns reporting.
+Keep `eval/` separate from `envs/`: the environment owns task semantics, while evaluation owns reporting and cross-surface analysis.
 
 ---
 
@@ -222,7 +224,7 @@ This structure is the target direction. It does not require every module to be r
 ### `src/agent_loop.py` -> `src/runtime/agent.py` and `src/rollouts/episode_runner.py`
 
 - keep `runtime/agent.py` focused on single-episode execution
-- keep `rollouts/episode_runner.py` focused on running and recording episodes
+- keep `rollouts/episode_runner.py` focused on adapting, running, and recording canonical episodes without becoming the long-term owner of training rollout execution
 - separate agent decisions from rollout collection
 
 ### `src/fallbacks.py` -> `src/runtime/agent.py`, `src/envs/transitions.py`, or `src/rollouts/serializers.py`
@@ -235,6 +237,7 @@ This structure is the target direction. It does not require every module to be r
 
 - move training-relevant reward inputs into `envs/rewards.py`
 - move offline benchmarking and reporting into `eval/metrics.py`
+- let evaluation consume NAT traces, NeMo Gym environment facts, and `openpipe-art` artifacts without redefining them
 - keep step-level rewards separate from offline evaluation summaries
 
 ### `src/training_export.py` -> `src/rollouts/serializers.py`, `src/training/datasets.py`, `src/training/openpipe_art_adapter.py`, and `src/training/experiments.py`
@@ -242,7 +245,7 @@ This structure is the target direction. It does not require every module to be r
 - eliminate the catch-all export file pattern
 - define a canonical trajectory format first
 - build training dataset views from that format
-- isolate rollout serialization from trainer code
+- isolate rollout serialization and NeMo Gym handoff from trainer code
 - isolate `openpipe-art` integration from runtime code
 
 ---
@@ -285,9 +288,9 @@ Use dataclasses or Pydantic models. Structured event records should replace unst
 ### Data boundaries
 
 - `runtime/` emits canonical events
-- `rollouts/` serializes canonical events
+- `rollouts/` serializes canonical events and adapts them to NeMo Gym collection surfaces
 - `training/` consumes them as datasets and reward views
-- `eval/` analyzes them offline
+- `eval/` analyzes them offline alongside environment facts and training artifacts
 
 ---
 
@@ -370,19 +373,19 @@ Rewrite the runtime toward a NAT-friendly structure.
 - keep repair logic explicit and auditable
 - make backend model swaps possible without changing agent semantics
 
-The runtime may call tools and emit events, but it should not schedule large rollout jobs, construct RL datasets, or own training/deployment concerns.
+The runtime may call tools and emit events, but it should not schedule large training rollout jobs, construct RL datasets, or own training/deployment concerns. NAT owns the interactive loop, not the scalable training rollout substrate.
 
 ---
 
 ## Rollout Requirements
 
-Treat multi-turn rollouts as first-class.
+Treat multi-turn rollout contracts as first-class, while using NeMo Gym as the intended owner of training-time rollout execution.
 
-- run many episodes through a stable adapter
+- run many episodes through a stable adapter into NeMo Gym collection
 - preserve exact turn alignment
 - preserve failure and repair events
 - serialize episodes in a stable format
-- keep rollout collection independent from training
+- keep repo rollout code focused on adapters and serialization rather than becoming a second framework
 - support future concurrency and batching without changing the episode schema
 
 Rollout collection must not depend on notebook execution order.
@@ -461,7 +464,7 @@ The notebook must not:
 1. Create `rollouts/trace_types.py`.
 2. Create `rollouts/serializers.py`.
 3. Create `rollouts/episode_runner.py`.
-4. Add any adapters needed for canonical trace handoff.
+4. Add any adapters needed for canonical trace handoff into NeMo Gym and `openpipe-art`.
 
 ### Phase 5: Build training semantics
 
@@ -562,10 +565,12 @@ The refactor is complete when all of the following are true:
 3. Structured traces are canonical across major flows.
 4. The environment is explicit and no longer hidden in notebook or evaluation code.
 5. The notebook consumes the library rather than defining core behavior.
-6. `openpipe-art`-facing logic remains separate from runtime, rollout, and evaluation ownership.
-7. Multi-turn RL readiness improves for successful trajectories, failed trajectories, reward shaping, rollout batching, and `openpipe-art` ingestion.
-8. Outdated stack assumptions are contained and clearly marked as historical where they remain.
-9. The late-order recovery scenario still runs end to end.
+6. NAT owns the interactive runtime loop, while NeMo Gym owns training-time rollout execution over repo-defined contracts.
+7. `openpipe-art`-facing logic remains separate from runtime, rollout adaptation, and evaluation ownership.
+8. Evaluation remains repo-owned and consumes NAT traces, NeMo Gym environment facts, and `openpipe-art` artifacts without redefining them.
+9. Multi-turn RL readiness improves for successful trajectories, failed trajectories, reward shaping, rollout batching, and `openpipe-art` ingestion.
+10. Outdated stack assumptions are contained and clearly marked as historical where they remain.
+11. The late-order recovery scenario still runs end to end.
 
 ---
 
@@ -580,4 +585,4 @@ Refactor the repository according to this document with these priorities:
 5. Prepare the codebase for real `openpipe-art`-oriented training and export flows.
 6. Preserve the current workshop scenario and demo value.
 
-When choices are ambiguous, prefer the option that most clearly separates runtime orchestration, environment logic, rollout collection, training semantics, and offline evaluation. Do not keep architecture-critical logic trapped in the notebook.
+When choices are ambiguous, prefer the option that most clearly separates NAT runtime orchestration, NeMo Gym environment and rollout execution, repo-owned contracts, `openpipe-art` training semantics, and offline evaluation. Do not keep architecture-critical logic trapped in the notebook.
