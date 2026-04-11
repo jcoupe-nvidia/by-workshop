@@ -49,6 +49,7 @@ def _check_imports() -> None:
     import src.rollouts
     import src.rollouts.trace_types
     import src.training
+    import src.training.curriculum
     import src.systems
     import src.eval
 

@@ -1,10 +1,9 @@
 # Migration Plan
 
 ## Current Status
-- The refactor has **not started yet**.
-- **Phase 1** is the current starting phase and is **not yet completed**.
-- **Phases 2-8** are pending.
-- The current repository should be treated as the **pre-refactor baseline**, not as evidence that any migration phase is already done.
+- **Phase 1** is **complete**.
+- **Phase 2** is the current starting phase and is **not yet completed**.
+- **Phases 3-8** are pending.
 
 ## Goal
 Reshape the repository from a flat, notebook-led demo into a small library with clear ownership boundaries that match [REFACTOR.md](REFACTOR.md) while preserving the current scenario, deterministic tools, and end-to-end workshop flow described in [CLAUDE.md](CLAUDE.md).
@@ -36,14 +35,14 @@ flowchart LR
 - `eval/` owns offline metrics, reports, and regression summaries. It should consume canonical traces and environment facts rather than re-implementing task transitions.
 
 ## Implementation Phases
-### 1. Establish canonical contracts first (current)
+### 1. Establish canonical contracts first (complete)
 - Create the new package skeleton under `src/`: [src/runtime](src/runtime), [src/envs](src/envs), [src/rollouts](src/rollouts), [src/training](src/training), [src/systems](src/systems), [src/eval](src/eval), plus [src/main.py](src/main.py). The target package set should explicitly include [src/training/curriculum.py](src/training/curriculum.py) in addition to the other training modules.
 - Introduce one canonical structured episode and event model early so every later move targets the same contract. Put the shared trajectory types in [src/rollouts/trace_types.py](src/rollouts/trace_types.py) and make them the source of truth for task input, initial environment state metadata, ordered turns, model actions, tool call payloads, tool results, validation and fallback events, step-level reward annotations, terminal outcomes, and summary metrics.
 - Define the explicit canonical event vocabulary from the start: `user_task`, `model_thought` when intentionally preserved, `tool_call`, `tool_result`, `tool_validation_error`, `tool_repair_attempt`, `tool_reject`, `agent_message`, and `terminal_outcome`. Represent these as strongly typed dataclasses or Pydantic models so structured records replace unstructured trace text as the primary artifact.
 - Split [src/schema.py](src/schema.py) into runtime-facing action schemas in [src/runtime/schemas.py](src/runtime/schemas.py) and task-specific validity rules in [src/envs/validators.py](src/envs/validators.py).
 - Preserve [src/scenario_data.py](src/scenario_data.py) as the deterministic data source unless a tiny wrapper is needed for environment initialization; do not rewrite the synthetic data model unless required for formal environment state.
 
-### 2. Refactor runtime into a NAT-friendly single-episode layer (pending)
+### 2. Refactor runtime into a NAT-friendly single-episode layer (current)
 - Move deterministic tool implementations from [src/tools.py](src/tools.py) into [src/runtime/tools.py](src/runtime/tools.py) and keep the registry and schema metadata there.
 - Rename the skill layer from [src/skills.py](src/skills.py) into [src/runtime/workflows.py](src/runtime/workflows.py) so it represents runtime workflow decomposition rather than training semantics.
 - Split [src/agent_loop.py](src/agent_loop.py) into small runtime modules:
