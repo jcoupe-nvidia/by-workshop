@@ -3,7 +3,7 @@ Training semantics package — openpipe-art is the primary downstream consumer.
 
 Owns:
     - Training-oriented datasets, reward views, and staged training progression
-    - openpipe-art record building and batch preparation
+    - Episode -> art.Trajectory / art.TrajectoryGroup conversion
     - Experiment configuration and curriculum staging
     - SFT and RL record formatting
 
@@ -16,7 +16,7 @@ Modules:
     - curriculum:           4-stage training curriculum (SFT -> short RL -> full RL -> robustness)
     - reward_views:         Stage-aware reward shaping over environment reward signals
     - datasets:             Episode filtering and training dataset assembly per stage
-    - openpipe_art_adapter: openpipe-art record building and serialization
+    - openpipe_art_adapter: Episode/TrainingRecord -> art.Trajectory/TrajectoryGroup conversion
     - experiments:          Experiment configs tying stages to training runs
 """
 from src.training.curriculum import (
@@ -39,10 +39,14 @@ from src.training.datasets import (
     extract_sft_dataset,
 )
 from src.training.openpipe_art_adapter import (
-    OpenPipeArtTrainingRecord,
-    build_openpipe_art_training_record,
-    build_openpipe_art_training_batch,
-    save_training_records_jsonl,
+    episode_to_art_trajectory,
+    training_record_to_art_trajectory,
+    training_batch_to_art_group,
+    enriched_episodes_to_art_group,
+    build_sft_art_trajectory,
+    build_sft_art_group,
+    save_art_trajectories_jsonl,
+    save_art_group_jsonl,
 )
 from src.training.experiments import (
     ExperimentConfig,
@@ -68,11 +72,15 @@ __all__ = [
     "build_training_dataset",
     "build_all_stage_datasets",
     "extract_sft_dataset",
-    # openpipe_art_adapter
-    "OpenPipeArtTrainingRecord",
-    "build_openpipe_art_training_record",
-    "build_openpipe_art_training_batch",
-    "save_training_records_jsonl",
+    # openpipe_art_adapter (art.Trajectory / art.TrajectoryGroup)
+    "episode_to_art_trajectory",
+    "training_record_to_art_trajectory",
+    "training_batch_to_art_group",
+    "enriched_episodes_to_art_group",
+    "build_sft_art_trajectory",
+    "build_sft_art_group",
+    "save_art_trajectories_jsonl",
+    "save_art_group_jsonl",
     # experiments
     "ExperimentConfig",
     "ExperimentPlan",

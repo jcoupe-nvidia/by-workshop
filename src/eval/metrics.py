@@ -379,3 +379,208 @@ def evaluate_trajectory(
         passed=passed,
         summary=summary,
     )
+
+
+# -- NAT ATIF trajectory evaluation ----------------------------------------
+
+def evaluate_atif_trajectory(
+    atif_trajectory: Any,
+    threshold: float = PASS_THRESHOLD,
+) -> TrajectoryEvaluation:
+    """Evaluate a NAT ATIF Trajectory by converting it to a canonical Episode.
+
+    Accepts a nat.atif.trajectory.Trajectory, reconstructs a minimal Episode
+    from ATIF steps, and runs the standard evaluators.
+
+    Args:
+        atif_trajectory: A nat.atif.trajectory.Trajectory object.
+        threshold: Minimum overall score to pass.
+
+    Returns:
+        TrajectoryEvaluation with per-dimension scores.
+    """
+    from nat.atif.trajectory import Trajectory as ATIFTrajectory
+
+    if not isinstance(atif_trajectory, ATIFTrajectory):
+        raise TypeError(f"Expected nat.atif.trajectory.Trajectory, got {type(atif_trajectory)}")
+
+    episode = _atif_to_episode(atif_trajectory)
+    return evaluate_trajectory(episode, threshold=threshold)
+
+
+def _atif_to_episode(atif_trajectory: Any) -> Episode:
+    """Reconstruct a minimal Episode from a NAT ATIF Trajectory.
+
+    Extracts tool calls and terminal outcomes from ATIF steps to build
+    an Episode with enough structure for the evaluators to score.
+    """
+    from src.rollouts.trace_types import (
+        EpisodeMetrics,
+        Event,
+        EventType,
+        ToolCallPayload,
+        ToolResultPayload,
+        TerminalOutcomePayload,
+    )
+
+    events: list[Event] = []
+    step_idx = 0
+    valid_calls = 0
+    invalid_calls = 0
+
+    task_id = atif_trajectory.extra.get("task_id", "") if atif_trajectory.extra else ""
+    task_prompt = atif_trajectory.extra.get("task_prompt", "") if atif_trajectory.extra else ""
+
+    for atif_step in atif_trajectory.steps:
+        source = atif_step.source
+
+        # Tool calls from agent steps
+        if source == "agent" and atif_step.tool_calls:
+            for tc in atif_step.tool_calls:
+                events.append(Event(
+                    event_type=EventType.TOOL_CALL,
+                    step_index=step_idx,
+                    payload=ToolCallPayload(
+                        tool_name=tc.function_name,
+                        arguments=tc.arguments if isinstance(tc.arguments, dict) else {},
+                        thought=atif_step.reasoning_content,
+                        raw_model_output=atif_step.message or "",
+                    ),
+                    reward=atif_step.extra.get("reward") if atif_step.extra else None,
+                ))
+                valid_calls += 1
+                step_idx += 1
+
+        # Tool results from system observation steps
+        elif source == "system" and atif_step.observation:
+            for obs_result in atif_step.observation.results:
+                import json as _json
+                try:
+                    result_data = _json.loads(obs_result.content) if obs_result.content else {}
+                except (ValueError, TypeError):
+                    result_data = {"raw": obs_result.content}
+                tool_name = atif_step.extra.get("tool_name", "") if atif_step.extra else ""
+                events.append(Event(
+                    event_type=EventType.TOOL_RESULT,
+                    step_index=step_idx,
+                    payload=ToolResultPayload(
+                        tool_name=tool_name,
+                        result=result_data,
+                    ),
+                ))
+                step_idx += 1
+
+        # Terminal agent message (final answer)
+        elif source == "agent" and not atif_step.tool_calls and atif_step.message:
+            import json as _json
+            try:
+                final_answer = _json.loads(atif_step.message)
+                if isinstance(final_answer, dict) and "action" in final_answer:
+                    events.append(Event(
+                        event_type=EventType.TERMINAL_OUTCOME,
+                        step_index=step_idx,
+                        payload=TerminalOutcomePayload(
+                            reason="final_answer",
+                            final_answer=final_answer,
+                        ),
+                        reward=atif_step.extra.get("reward") if atif_step.extra else None,
+                    ))
+                    step_idx += 1
+            except (ValueError, TypeError):
+                pass
+
+        # Validation error system messages
+        elif source == "system" and not atif_step.observation:
+            if atif_step.message and "error" in atif_step.message.lower():
+                invalid_calls += 1
+
+    # Extract metrics from ATIF final_metrics
+    extra = atif_trajectory.final_metrics.extra if atif_trajectory.final_metrics else {}
+    total_reward = extra.get("total_reward", 0.0) if extra else 0.0
+    model_calls = extra.get("model_calls", 0) if extra else 0
+    repair_attempts = extra.get("repair_attempts", 0) if extra else 0
+    rejects = extra.get("rejects", 0) if extra else 0
+
+    # Find terminal
+    terminal = None
+    for event in reversed(events):
+        if event.event_type == EventType.TERMINAL_OUTCOME:
+            terminal = event.payload
+            break
+
+    metrics = EpisodeMetrics(
+        total_steps=step_idx,
+        valid_tool_calls=valid_calls,
+        invalid_tool_calls=invalid_calls,
+        repair_attempts=repair_attempts,
+        repair_successes=0,
+        rejects=rejects,
+        model_calls=model_calls,
+        wall_time_seconds=extra.get("wall_time_seconds", 0.0) if extra else 0.0,
+        total_reward=total_reward,
+    )
+
+    return Episode(
+        task_id=task_id,
+        task_prompt=task_prompt,
+        model_id=atif_trajectory.agent.model_name if atif_trajectory.agent else "",
+        events=events,
+        terminal=terminal,
+        metrics=metrics,
+    )
+
+
+# -- NeMo Gym result row evaluation ----------------------------------------
+
+def evaluate_nemo_gym_result(
+    result_row: Any,
+    threshold: float = PASS_THRESHOLD,
+) -> dict[str, Any]:
+    """Produce a lightweight evaluation summary from a NeMo Gym result row.
+
+    NeMo Gym result rows (NemoGymResultRow) contain pre-computed reward
+    components from the environment. This function maps those components
+    to the eval dimensions without re-running the full evaluators.
+
+    Args:
+        result_row: A NemoGymResultRow (from envs.nemo_gym_adapter).
+        threshold: Minimum overall score to pass.
+
+    Returns:
+        Dict with dimension scores and an overall pass/fail.
+    """
+    from src.envs.nemo_gym_adapter import NemoGymResultRow
+
+    if not isinstance(result_row, NemoGymResultRow):
+        raise TypeError(f"Expected NemoGymResultRow, got {type(result_row)}")
+
+    total_calls = result_row.valid_tool_calls + result_row.invalid_tool_calls
+    tool_validity = (
+        result_row.valid_tool_calls / total_calls if total_calls > 0 else 0.0
+    )
+
+    # Map NeMo Gym reward components to eval dimensions
+    scores = {
+        "tool_validity": round(tool_validity, 3),
+        "tool_accuracy": round(result_row.avg_correct_arguments, 3),
+        "sequence_correctness": round(result_row.avg_dependency_satisfied, 3),
+        "task_success": float(result_row.task_success),
+        "efficiency": round(result_row.avg_efficiency, 3),
+        "terminal_quality": round(result_row.terminal_quality, 3),
+    }
+
+    # Weighted overall (using a subset of the full eval weights)
+    overall = sum(
+        scores.get(dim, 0.0) * DIMENSION_WEIGHTS.get(dim, 0.0)
+        for dim in scores
+    )
+    overall = round(overall, 3)
+
+    return {
+        "order_id": result_row.order_id,
+        "dimension_scores": scores,
+        "total_reward": result_row.total_reward,
+        "avg_step_reward": result_row.avg_step_reward,
+        "overall": overall,
+        "passed": overall >= threshold,
+    }

@@ -40,9 +40,11 @@ from src.envs.rewards import (  # noqa: F401
 from src.envs.late_order_env import LateOrderRecoveryEnv  # noqa: F401
 from src.envs.validators import check_dependencies  # noqa: F401
 
-# nemo-gym-compatible export format (optional training input)
+# nemo-gym-compatible export format and resource server
 from src.envs.nemo_gym_adapter import (  # noqa: F401
     episode_to_nemo_gym_row,
     build_rollout_input_row,
+    build_resource_server_config,
     NemoGymResultRow,
+    LateOrderResourceServer,
 )

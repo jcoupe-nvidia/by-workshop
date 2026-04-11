@@ -16,6 +16,9 @@ from src.eval.metrics import (  # noqa: F401
     EVALUATORS,
     # Main entry point
     evaluate_trajectory,
+    # NAT ATIF and NeMo Gym entry points
+    evaluate_atif_trajectory,
+    evaluate_nemo_gym_result,
     # Individual evaluators
     eval_skill_selection,
     eval_tool_validity,
