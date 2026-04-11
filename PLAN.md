@@ -10,8 +10,8 @@
 - **Phases 7-8** are pending.
 
 ## Completed Phases To Reopen
-- **Phase 2** must be reopened and partially redone because the runtime package is still backed by repo-local orchestration instead of actual NeMo Agent Toolkit integrations.
-- **Phase 3** must be reopened and partially redone because the explicit environment has not yet been wired into a real NAT -> ProRL -> NeMo RL execution path.
+- **Phase 2** has been **revisited and completed**. NAT integration is now real: tools are registered as NAT Functions with Pydantic schemas (`nat_tools.py`), the LLM backend uses `NIMModelConfig` (`nat_llm.py`), Episodes convert to ATIF Trajectories (`atif_adapter.py`), and skills are directory-backed with `SKILL.md` files and canonical discovery APIs (`skills/api.py`). Workflow registries are derived from skill metadata.
+- **Phase 3** has been **revisited and completed**. The environment is now wired into the NAT/nemo-gym execution path: enriched episodes produce NeMo RL trajectories (via `prorl_adapter.py`), ATIF trajectories (via `atif_adapter.py`), and nemo-gym result rows with 17 numeric reward fields for reward profiling (via `envs/nemo_gym_adapter.py`). The full path env.step() → reward signals → enriched episode → all three output formats is verified end-to-end.
 - **Phase 4** must be reopened and partially redone because the rollout package exists, but it is still repo-local rollout infrastructure rather than actual ProRL-backed collection and serialization.
 - **Phase 1** does not need a full redo, but its canonical contracts should be revalidated once the real rollout, trainer, and systems libraries become the active code paths.
 

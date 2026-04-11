@@ -1,8 +1,9 @@
 """
-ProRL adapter: maps canonical Episodes to NeMo RL-compatible trajectory format.
+ProRL adapter: maps canonical Episodes to NeMo RL and ATIF trajectory formats.
 
 Owns:
     - Converting enriched Episodes into NeMo RL trajectory records
+    - Converting enriched Episodes into ATIF Trajectories (via atif_adapter)
     - Per-step observation/action/reward triple extraction from Episode events
     - Stable JSONL serialization of NeMo RL trajectories
     - ProRL-style reward decomposition view over Episode rewards
@@ -14,16 +15,16 @@ Does NOT own:
     - Megatron training configuration (see systems/)
     - Training dataset views or curriculum staging (see training/)
 
-This module replaces the AgentTrace-consuming export path in training_export.py
-with a new path that consumes the canonical Episode type. It produces records
-suitable for NeMo RL ingestion without encoding trainer-specific semantics.
+Two output formats:
+    1. NeMoRLTrajectory -- lightweight observation/action/reward triples for NeMo RL
+    2. ATIF Trajectory  -- full NAT trajectory format for finetuning infrastructure
 
 Usage::
 
-    from src.rollouts.prorl_adapter import episode_to_nemo_trajectory
+    from src.rollouts.prorl_adapter import episode_to_nemo_trajectory, episode_to_atif_trajectory
 
-    trajectory = episode_to_nemo_trajectory(enriched_result.episode)
-    jsonl_line = nemo_trajectory_to_jsonl(trajectory)
+    nemo_traj = episode_to_nemo_trajectory(enriched_result.episode)
+    atif_traj = episode_to_atif_trajectory(enriched_result.episode)
 """
 from __future__ import annotations
 
@@ -245,6 +246,45 @@ def save_nemo_trajectories_jsonl(
     with open(path, "w") as f:
         for traj in trajectories:
             f.write(nemo_trajectory_to_jsonl(traj) + "\n")
+
+
+# -- ATIF trajectory export ---------------------------------------------------
+
+def episode_to_atif_trajectory(
+    episode: Episode,
+    agent_name: str = "by-workshop-agent",
+    agent_version: str = "0.1.0",
+) -> Any:
+    """Convert an Episode to a NAT ATIF Trajectory.
+
+    This wraps the runtime's atif_adapter to provide a unified export
+    surface alongside NeMo RL trajectories.
+
+    Args:
+        episode: An Episode (ideally enriched with rewards).
+        agent_name: Agent name for ATIF metadata.
+        agent_version: Agent version for ATIF metadata.
+
+    Returns:
+        nat.atif.trajectory.Trajectory instance.
+    """
+    from src.runtime.atif_adapter import episode_to_atif
+    return episode_to_atif(episode, agent_name=agent_name, agent_version=agent_version)
+
+
+def save_atif_trajectories_jsonl(
+    trajectories: list[Any],
+    path: str,
+) -> None:
+    """Write ATIF trajectories to a JSONL file.
+
+    Args:
+        trajectories: List of nat.atif.trajectory.Trajectory objects.
+        path: Output file path.
+    """
+    with open(path, "w") as f:
+        for traj in trajectories:
+            f.write(json.dumps(traj.to_json_dict()) + "\n")
 
 
 # -- Internal helpers ---------------------------------------------------------
