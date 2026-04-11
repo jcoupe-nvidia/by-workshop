@@ -4,8 +4,15 @@
 - **Phase 1** is **complete**.
 - **Phase 2** is **complete**.
 - **Phase 3** is **complete**.
-- **Phase 4** is the next phase to implement.
-- **Phases 5-8** are pending.
+- **Phase 4** is **complete**.
+- **Phase 5** is the next phase to implement.
+- **Phases 6-8** are pending.
+
+## Completed Phases To Reopen
+- **Phase 2** must be reopened and partially redone because the runtime package is still backed by repo-local orchestration instead of actual NeMo Agent Toolkit integrations.
+- **Phase 3** must be reopened and partially redone because the explicit environment has not yet been wired into a real NAT -> ProRL -> NeMo RL execution path.
+- **Phase 4** must be reopened and partially redone because the rollout package exists, but it is still repo-local rollout infrastructure rather than actual ProRL-backed collection and serialization.
+- **Phase 1** does not need a full redo, but its canonical contracts should be revalidated once the real rollout, trainer, and systems libraries become the active code paths.
 
 ## Goal
 Reshape the repository from a flat, notebook-led demo into a small library with clear ownership boundaries while preserving the current scenario, deterministic tools, and end-to-end workshop flow described in [CLAUDE.md](CLAUDE.md).
@@ -69,7 +76,7 @@ flowchart LR
 - Implement dense, sequence-aware reward inputs here rather than only final success checks. At minimum, capture signals for valid structured tool calls, correct tool choice for current state, correct argument extraction, dependency satisfaction, non-redundancy, progress toward resolution, correct final recommendation, and concise completion.
 - Include explicit penalties for malformed tool calls, invalid schema, dependency violations, repeated calls, looping behavior, hallucinated unsupported conclusions, overlong episodes, and silent fallback reliance. The decision process should be rewardable turn by turn.
 
-### 4. Build the rollout layer around canonical traces (pending)
+### 4. Build the rollout layer around canonical traces (complete)
 - Create [src/rollouts/episode_runner.py](src/rollouts/episode_runner.py), [src/rollouts/serializers.py](src/rollouts/serializers.py), and [src/rollouts/prorl_adapter.py](src/rollouts/prorl_adapter.py).
 - Move episode capture and serialization responsibilities out of [src/agent_loop.py](src/agent_loop.py) and [src/training_export.py](src/training_export.py).
 - Ensure rollout serialization preserves exact turn order, validation failures, repairs, rejects, and terminal outcomes so ProRL-style collection can scale later without changing the episode schema.

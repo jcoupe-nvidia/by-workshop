@@ -1,8 +1,8 @@
 # by-workshop
 
-Notebook-centric MVP for a workshop on agentic supply-chain workflows on the NVIDIA stack.
+Notebook-centric workshop repo for agentic supply-chain workflows on the NVIDIA stack.
 
-The repository demonstrates a real model-driven agent loop over deterministic tools for a single late-order recovery scenario, with explicit skills, structured tool calls, fallback parsing, sequence-sensitive evaluation, and training-oriented export.
+The repository is being refactored from a custom notebook-led demo into a library that uses the actual NVIDIA stack for runtime orchestration, rollout collection, post-training, and scalable training systems. The target end state is one late-order-recovery scenario implemented with deterministic tools, explicit skills, structured tool calling, fallback handling, sequence-sensitive evaluation, and real NVIDIA-library-backed integration paths.
 
 ## What This Repo Demonstrates
 
@@ -10,7 +10,24 @@ The repository demonstrates a real model-driven agent loop over deterministic to
 - Explicit higher-level skills composed from deterministic tools
 - Nemotron-style structured tool calling with validation and dependency checks
 - Repair/reject fallback handling for malformed tool outputs
-- Sequence-sensitive evaluation and training-oriented export aligned to NeMo RL, NVIDIA ProRL, and NVIDIA Megatron
+- Sequence-sensitive evaluation and training-oriented export
+- Ongoing migration to real `NeMo Agent Toolkit`, `NeMo RL`, `ProRL` rollout infrastructure, and `Megatron Bridge`
+
+## Required NVIDIA Stack
+
+The intended working environment for this repo now explicitly includes the actual NVIDIA libraries, not only local code that imitates their roles:
+
+- `nvidia-nat` for NeMo Agent Toolkit runtime orchestration
+- `nemo-gym` plus `prorl-agent-server` for rollout and agent-server infrastructure around ProRL-style collection
+- `nemo-rl` from source for trainer-facing RL and post-training flows
+- `megatron-bridge` for Megatron-backed training systems and checkpoint/interoperability surfaces
+
+The current `environment.yaml` installs:
+
+- package installs for `nvidia-nat`, `nemo-gym`, and `megatron-bridge`
+- source-repo installs for `nemo-rl` and `prorl-agent-server`
+
+This is stricter than the earlier repo state, which only depended on `requests` and relied on local scaffolding.
 
 ## Core Scenario
 
@@ -28,13 +45,14 @@ The agent investigates whether the original source DC can still fulfill the orde
 - `notebooks/late_order_recovery_workshop.ipynb`: main workshop notebook and live demo flow
 - `documents/llm-access.md`: local model endpoint, model id, and smoke test
 - `src/scenario_data.py`: synthetic in-memory orders, shipments, inventory, transfer lanes, supplier options, capacity, and substitutes
-- `src/tools.py`: deterministic tool implementations and registry
-- `src/skills.py`: explicit higher-level skills and allowed tool-use patterns
-- `src/schema.py`: canonical structured tool-call schema and validators
-- `src/agent_loop.py`: OpenCode-inspired think/emit/validate/execute/observe loop
-- `src/fallbacks.py`: repair/reject handling for malformed or mixed outputs
-- `src/evaluation.py`: sequence-sensitive evaluators
-- `src/training_export.py`: NeMo RL export, ProRL-style rewards, and Megatron config sketch
+- `src/runtime/`: NAT-facing runtime package
+- `src/envs/`: explicit task environment state, transitions, validators, and rewards
+- `src/rollouts/`: canonical trace types plus rollout and ProRL-adapter work
+- `src/training/`: NeMo RL-facing training semantics
+- `src/systems/`: Megatron-Bridge-facing training systems
+- `src/eval/`: offline evaluation and reporting
+- `src/main.py`: entrypoint for local checks and episode execution
+- legacy top-level modules such as `src/tools.py` and `src/agent_loop.py` currently remain as compatibility shims during migration
 
 ## Execution Flow
 
@@ -54,10 +72,36 @@ Run these commands from the repository root:
 ```bash
 conda env create -f environment.yaml
 conda activate by-workshop
+python -m src.main --check-imports
 jupyter lab
 ```
 
 Then open `notebooks/late_order_recovery_workshop.ipynb`.
+
+## Verify NVIDIA Libraries
+
+After creating the environment, confirm the required stack is present:
+
+```bash
+nat --version
+python - <<'PY'
+import nemo_rl
+import nemo_gym
+import prorl_agent_server
+from megatron.bridge import AutoBridge
+
+print("nemo_rl:", nemo_rl.__name__)
+print("nemo_gym:", nemo_gym.__name__)
+print("prorl_agent_server:", prorl_agent_server.__name__)
+print("megatron_bridge:", AutoBridge.__name__)
+PY
+```
+
+Notes:
+
+- `NeMo Agent Toolkit` publishes the `nat` CLI through the `nvidia-nat` package.
+- `NeMo RL` and `ProRL-Agent-Server` are currently installed from source repositories in `environment.yaml` because their upstream setup is source-first.
+- Upstream NVIDIA docs generally prefer `uv`-managed virtual environments for these libraries; this repo keeps a `conda` environment only as a workshop convenience wrapper.
 
 ## Local Model
 
@@ -89,10 +133,21 @@ When you run the later notebook sections, the repo can produce:
 
 - worked successful and repair trajectories
 - seven-dimension trajectory evaluations
-- NeMo RL-style JSONL exports
-- a conceptual Megatron training config for an `8x H100` target environment
+- canonical episodes and trajectory artifacts intended for NeMo RL consumption
+- rollout artifacts intended for ProRL-style collection
+- Megatron-Bridge-facing systems scaffolding for an `8x H100` target environment
 
 The notebook writes generated training artifacts under `artifacts/` when those export cells are executed.
+
+## Migration Status
+
+The repo is still mid-migration from local stand-ins to real NVIDIA-library-backed paths.
+
+- `Phase 1` remains largely valid, but its canonical contracts still need to be revalidated against the real rollout, trainer, and systems integrations.
+- `Phase 2` must be reopened: the runtime package exists, but the executable runtime path still needs to be replaced with actual `NeMo Agent Toolkit` orchestration.
+- `Phase 3` must be revisited: the explicit environment exists, but it is not yet the authoritative environment flowing through the real `NAT -> ProRL -> NeMo RL` execution path.
+- `Phase 4` must also be reopened: the rollout package exists, but it still needs to be replaced or wrapped around actual `ProRL` rollout infrastructure.
+- `Phases 5-8` remain the remaining planned work, with `Phases 5-6` carrying the core `NeMo RL` and `Megatron Bridge` integrations.
 
 ## Scope
 
