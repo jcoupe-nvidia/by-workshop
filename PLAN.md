@@ -1,83 +1,129 @@
-# Phased Development Plan
+# Migration Plan
 
-Build a workshop-ready, notebook-centric MVP for late-order recovery on the NVIDIA stack, using a real model-driven agent loop over deterministic tools and a small set of helper Python modules for clarity and reuse.
+## Current Status
+- **Phase 1** is **complete**.
+- **Phase 2** is the current starting phase and is **not yet completed**.
+- **Phases 3-8** are pending.
 
-## Assumptions
-- Primary deliverable: a workshop notebook plus a few helper Python modules.
-- The first implementation pass should include a real model-driven loop, not only mocked outputs.
-- Non-goals remain those in [CLAUDE.md](CLAUDE.md): no production orchestration, no large benchmark suite, and no deployment engineering.
+## Goal
+Reshape the repository from a flat, notebook-led demo into a small library with clear ownership boundaries that match [REFACTOR.md](REFACTOR.md) while preserving the current scenario, deterministic tools, and end-to-end workshop flow described in [CLAUDE.md](CLAUDE.md).
 
-## Fixed Constraints From The Spec
-- Keep the scenario centered on late order recovery for `SO-10482` with machine-checkable sequence dependencies from [CLAUDE.md](CLAUDE.md).
-- Target a typical successful run of `5-10` tool calls, `2-4` explicit skills, and `7-9` deterministic tools.
-- Explicitly cover the required stack references: NeMo RL, NVIDIA Megatron, NVIDIA ProRL, and OpenCode as the architectural inspiration for the local loop.
+## Current Pressure Points
+- [src/agent_loop.py](src/agent_loop.py) currently mixes model I/O, prompt policy, validation, fallback repair, trace capture, and trajectory shaping.
+- [src/evaluation.py](src/evaluation.py) and [src/training_export.py](src/training_export.py) both encode sequence and reward semantics, so training and offline evaluation are not clearly separated.
+- [src/training_export.py](src/training_export.py) is the main catch-all module: it mixes ProRL-style rewards, NeMo RL export, and Megatron config sketches.
+- [notebooks/late_order_recovery_workshop.ipynb](notebooks/late_order_recovery_workshop.ipynb) is already a consumer of `src/`, but it still contains scripted demo traces and loop-like teaching code that should not remain the architecture source of truth.
 
-## Proposed Repo Shape
-- [notebooks/late_order_recovery_workshop.ipynb](notebooks/late_order_recovery_workshop.ipynb): the main pedagogical artifact and live demo flow.
-- [src/scenario_data.py](src/scenario_data.py): small synthetic in-memory tables for orders, shipments, inventory, transfer lanes, supplier expedite options, capacity, and substitutes.
-- [src/tools.py](src/tools.py): deterministic tool implementations and tool registry.
-- [src/skills.py](src/skills.py): explicit higher-level skills with allowed tool-use patterns.
-- [src/schema.py](src/schema.py): canonical Nemotron-style structured tool-call schema plus validators.
-- [src/agent_loop.py](src/agent_loop.py): think/emit/validate/execute/observe loop, model adapter boundary, and trace capture.
-- [src/fallbacks.py](src/fallbacks.py): repair/reject parsing logic for malformed or mixed outputs.
-- [src/evaluation.py](src/evaluation.py): sequence-sensitive evaluators and simple scoring helpers.
-- [src/training_export.py](src/training_export.py): NeMo RL trajectory export, ProRL reward computation, and Megatron config sketch.
-- [README.md](README.md): concise repo entrypoint and how to run the notebook.
-- Optional later: [examples/](examples/) or [artifacts/](artifacts/) for saved traces and evaluator outputs if that improves workshop usability.
+## Target Architecture
+```mermaid
+flowchart LR
+    notebook["Notebook_Demo"] --> runtime["runtime/ (NAT)"]
+    runtime --> envs["envs/"]
+    runtime --> rollouts["rollouts/ (ProRL)"]
+    rollouts --> training["training/ (NeMo_RL)"]
+    training --> systems["systems/ (Megatron)"]
+    rollouts --> evalLayer["eval/"]
+    envs --> evalLayer
+```
 
-## Phase 1: Design The Scenario And Skeleton ✅
-- Create the notebook outline to mirror the eleven required sections from [CLAUDE.md](CLAUDE.md).
-- Lock the single scenario, success criteria, sequence dependencies, and mitigation option set before writing execution code.
-- Define the minimal helper-module boundaries so the notebook stays short and presentation-friendly.
-- Decide the real-model integration seam early: one thin adapter in `src/agent_loop.py`, with deterministic tool execution remaining local.
+## Ownership Guardrails
+- `runtime/` owns single-episode agent behavior, prompt policy, tool invocation, and structured event emission. It must not schedule rollout jobs, construct RL datasets, choose distributed training topology, or own checkpoint conversion logic.
+- `envs/` owns task state, validity, transitions, terminal conditions, and reward-relevant facts. It defines what happened, but it must not decide rollout orchestration, trainer behavior, or distributed execution settings.
+- `rollouts/` owns episode running at scale, trace capture, failure and retry representation, and stable serialization. It must not redefine tool schemas, task environment logic, reward semantics, or Megatron execution settings.
+- `training/` owns trainer-facing datasets, reward views, experiments, and curriculum staging. It must not redefine runtime interfaces, rollout orchestration, or Megatron parallel configuration details.
+- `systems/` owns scalable training execution, checkpoint boundaries, launch profiles, and Megatron-facing configuration. It must not decide tool-calling policy, rollout semantics, reward functions, task logic, or offline benchmark definitions.
+- `eval/` owns offline metrics, reports, and regression summaries. It should consume canonical traces and environment facts rather than re-implementing task transitions.
 
-## Phase 2: Build Synthetic Data And Deterministic Tools ✅
-- Implement the small in-memory scenario dataset in `src/scenario_data.py`.
-- Implement `7-9` deterministic tools in `src/tools.py`, matching the spec closely: order lookup, shipment status, source inventory, alternate inventory, transfer ETA, supplier expedite, capacity, scoring, and final recommendation support.
-- Make tool outputs strongly structured so traces, validation, and evaluation are easy to inspect in notebook cells.
-- Encode sequence dependencies explicitly so invalid call orders can be detected rather than only implied.
+## Implementation Phases
+### 1. Establish canonical contracts first (complete)
+- Create the new package skeleton under `src/`: [src/runtime](src/runtime), [src/envs](src/envs), [src/rollouts](src/rollouts), [src/training](src/training), [src/systems](src/systems), [src/eval](src/eval), plus [src/main.py](src/main.py). The target package set should explicitly include [src/training/curriculum.py](src/training/curriculum.py) in addition to the other training modules.
+- Introduce one canonical structured episode and event model early so every later move targets the same contract. Put the shared trajectory types in [src/rollouts/trace_types.py](src/rollouts/trace_types.py) and make them the source of truth for task input, initial environment state metadata, ordered turns, model actions, tool call payloads, tool results, validation and fallback events, step-level reward annotations, terminal outcomes, and summary metrics.
+- Define the explicit canonical event vocabulary from the start: `user_task`, `model_thought` when intentionally preserved, `tool_call`, `tool_result`, `tool_validation_error`, `tool_repair_attempt`, `tool_reject`, `agent_message`, and `terminal_outcome`. Represent these as strongly typed dataclasses or Pydantic models so structured records replace unstructured trace text as the primary artifact.
+- Split [src/schema.py](src/schema.py) into runtime-facing action schemas in [src/runtime/schemas.py](src/runtime/schemas.py) and task-specific validity rules in [src/envs/validators.py](src/envs/validators.py).
+- Preserve [src/scenario_data.py](src/scenario_data.py) as the deterministic data source unless a tiny wrapper is needed for environment initialization; do not rewrite the synthetic data model unless required for formal environment state.
 
-## Phase 3: Add Explicit Skills And Tool-Use Policy ✅
-- Implement `2-4` explicit skills in `src/skills.py`, likely the four suggested in [CLAUDE.md](CLAUDE.md) unless simplification is needed after prototyping.
-- For each skill, define purpose, inputs, outputs, and allowed tool sequences.
-- Keep skill transitions visible in the notebook so users can see when the agent is diagnosing, checking primary fulfillment, exploring alternates, and synthesizing a recommendation.
+### 2. Refactor runtime into a NAT-friendly single-episode layer (current)
+- Move deterministic tool implementations from [src/tools.py](src/tools.py) into [src/runtime/tools.py](src/runtime/tools.py) and keep the registry and schema metadata there.
+- Rename the skill layer from [src/skills.py](src/skills.py) into [src/runtime/workflows.py](src/runtime/workflows.py) so it represents runtime workflow decomposition rather than training semantics.
+- Split [src/agent_loop.py](src/agent_loop.py) into small runtime modules:
+  - [src/runtime/agent.py](src/runtime/agent.py) for the single-episode loop and model adapter boundary.
+  - [src/runtime/prompts.py](src/runtime/prompts.py) for prompt and runtime policy.
+  - [src/runtime/tracing.py](src/runtime/tracing.py) for emitting canonical structured events.
+- Move fallback handling from [src/fallbacks.py](src/fallbacks.py) into explicit runtime parsing and repair behavior, but record repair and reject outcomes as structured events instead of silently normalizing them away.
+- Keep [documents/llm-access.md](documents/llm-access.md) as the source of truth for the local model endpoint and model id.
 
-## Phase 4: Implement Real Model Agent Loop ✅
-- Build the canonical tool-call schema and validation logic in `src/schema.py`.
-- Implement an OpenCode-inspired execution loop in `src/agent_loop.py`: prompt model, parse output, validate tool call, execute tool, append observation, and continue with bounded iterations. Build the loop locally so each step stays visible for workshop understanding.
-- Keep model integration narrow: one adapter function or class that can call the chosen model endpoint while the rest of the stack remains deterministic and testable.
-- Capture full trajectory state so the notebook can replay a successful run and inspect intermediate reasoning safely.
+### 3. Make the environment explicit (pending)
+- Add [src/envs/state.py](src/envs/state.py), [src/envs/transitions.py](src/envs/transitions.py), [src/envs/rewards.py](src/envs/rewards.py), and [src/envs/late_order_env.py](src/envs/late_order_env.py).
+- Encode the late-order-recovery state machine here: known facts, completed subgoals, allowed next actions, terminal conditions, invalid-action counters, and reward-relevant transition facts.
+- Ensure environment state covers the scenario facts called out in [REFACTOR.md](REFACTOR.md): order id, source DC status, alternate DC feasibility, supplier expedite feasibility, partial-fulfillment feasibility, substitute SKU viability, tool calls already made, current recommendation candidate, failure flags, invalid-action counters, and terminal status.
+- Move prerequisite and sequence-sensitive task semantics out of ad hoc checks in [src/tools.py](src/tools.py), [src/schema.py](src/schema.py), and [src/evaluation.py](src/evaluation.py) so the environment becomes the single authority on what happened and what was valid now.
+- Keep deterministic tool execution unchanged in behavior; the environment should govern validity and state transitions, not replace the tool outputs.
+- Implement dense, sequence-aware reward inputs here rather than only final success checks. At minimum, capture signals for valid structured tool calls, correct tool choice for current state, correct argument extraction, dependency satisfaction, non-redundancy, progress toward resolution, correct final recommendation, and concise completion.
+- Include explicit penalties for malformed tool calls, invalid schema, dependency violations, repeated calls, looping behavior, hallucinated unsupported conclusions, overlong episodes, and silent fallback reliance. The decision process should be rewardable turn by turn.
 
-## Phase 5: Add Fallback Parsing And Recovery ✅
-- Implement malformed-output handling in `src/fallbacks.py` for malformed JSON, mixed text plus JSON, missing fields, unknown tools, and unsafe arguments.
-- Define a clear repair-vs-reject policy and surface that policy in the notebook with one worked repair trajectory.
-- Make fallback behavior inspectable and deterministic enough that workshop attendees can see exactly why a call was repaired or rejected.
+### 4. Build the rollout layer around canonical traces (pending)
+- Create [src/rollouts/episode_runner.py](src/rollouts/episode_runner.py), [src/rollouts/serializers.py](src/rollouts/serializers.py), and [src/rollouts/prorl_adapter.py](src/rollouts/prorl_adapter.py).
+- Move episode capture and serialization responsibilities out of [src/agent_loop.py](src/agent_loop.py) and [src/training_export.py](src/training_export.py).
+- Ensure rollout serialization preserves exact turn order, validation failures, repairs, rejects, and terminal outcomes so ProRL-style collection can scale later without changing the episode schema.
+- Keep rollout code independent from reward semantics and Megatron configuration.
 
-## Phase 6: Worked Examples And Evaluation ✅
-- Add one successful trajectory and one failure-or-repair trajectory inside the notebook.
-- Implement evaluators in `src/evaluation.py` for skill selection quality, tool validity, tool accuracy, sequence correctness, task success, recovery quality, and efficiency.
-- Ensure at least one evaluator explicitly checks ordered dependencies such as inventory discovery before transfer ETA and candidate option generation before scoring.
+### 5. Build training semantics layer (pending)
+- Break up [src/training_export.py](src/training_export.py) rather than porting it whole.
+- Move trainer-facing data views into [src/training/datasets.py](src/training/datasets.py) and [src/training/reward_views.py](src/training/reward_views.py).
+- Put NeMo RL-specific consumption and adaptation into [src/training/nemo_rl_adapter.py](src/training/nemo_rl_adapter.py), stage definitions into [src/training/experiments.py](src/training/experiments.py), and curriculum staging into [src/training/curriculum.py](src/training/curriculum.py).
+- Treat NeMo RL as the owner of reward views, datasets, and staged training progression.
+- Design the training layer to support the staged progression required by [REFACTOR.md](REFACTOR.md): SFT on successful trajectories, short-horizon RL with dense rewards, full multi-turn RL with sequence-aware rewards, and a robustness curriculum with malformed calls and dead ends.
 
-## Phase 7: Training-Oriented Wrap-Up ✅
-- Add notebook sections showing how traces, repair cases, and evaluator outputs could be curated locally and prepared for downstream export.
-- Add one concrete export or handoff example for NeMo RL and frame reward design using NVIDIA ProRL concepts.
-- Connect the trajectory and reward design discussion to NVIDIA Megatron and the target environment of `8 H100 GPUs`, but keep it conceptual rather than operational.
-- Capture NeMo Guardrails as a clearly labeled optional follow-up rather than core MVP scope.
+### 6. Build scalable training systems layer (pending)
+- Create the Megatron-facing systems package: [src/systems/megatron_bridge.py](src/systems/megatron_bridge.py), [src/systems/parallelism.py](src/systems/parallelism.py), [src/systems/checkpointing.py](src/systems/checkpointing.py), [src/systems/launch_configs.py](src/systems/launch_configs.py), and [src/systems/model_recipes.py](src/systems/model_recipes.py).
+- Treat Megatron as the owner of distributed execution profiles, checkpoint boundaries, hardware-targeted launch recipes, and stable large-job configuration surfaces.
+- Include support for local development, single-node multi-GPU, and cluster or H100-scale profiles without moving reward or rollout semantics into the systems layer.
 
-## Implementation Order Recommendation
-1. Notebook skeleton and scenario specification.
-2. Synthetic data and deterministic tools.
-3. Skills and sequence rules.
-4. Structured schema, validator, and fallback parser.
-5. Real model adapter and agent loop.
-6. Worked traces and evaluation.
-7. Training-oriented discussion and repo polish.
+### 7. Rebuild offline evaluation on top of the new contracts (pending)
+- Split [src/evaluation.py](src/evaluation.py) into [src/eval/metrics.py](src/eval/metrics.py), [src/eval/reports.py](src/eval/reports.py), and, if needed, [src/eval/regression.py](src/eval/regression.py).
+- Keep offline reporting human-facing and post hoc; move training-relevant reward facts into [src/envs/rewards.py](src/envs/rewards.py) and [src/training/reward_views.py](src/training/reward_views.py).
+- Preserve the current workshop dimensions where they still make sense, but make them consume canonical traces instead of bespoke `AgentTrace` structures.
 
-## Key Risks To Manage Early
-- A real model may produce inconsistent tool-call formatting, so the schema and fallback layer should be implemented before deep prompt tuning.
-- If the notebook owns too much logic, the live demo will become hard to follow; push reusable mechanics into the small helper modules.
-- If tools are too realistic or datasets too large, the workshop loses clarity; keep the data synthetic, small, and deterministic.
-- If evaluation is added too late, it will be harder to prove sequence sensitivity; design evaluator hooks while building the tool registry and agent loop.
+### 8. Demote the notebook and finish the public surfaces (pending)
+- Update [notebooks/late_order_recovery_workshop.ipynb](notebooks/late_order_recovery_workshop.ipynb) to import the refactored library rather than defining any architecture-critical logic inline.
+- Add a minimal entrypoint in [src/main.py](src/main.py) for running one episode outside the notebook.
+- Move any large scripted trace builders or mini-loop demo helpers out of the notebook into importable code if they still need to exist.
+- Update [README.md](README.md) to describe the new package boundaries, the runtime, environment, rollout, training, and systems split, and the preserved workshop path.
+- Add migration notes documenting what moved where from [src/tools.py](src/tools.py), [src/skills.py](src/skills.py), [src/schema.py](src/schema.py), [src/agent_loop.py](src/agent_loop.py), [src/fallbacks.py](src/fallbacks.py), [src/evaluation.py](src/evaluation.py), and [src/training_export.py](src/training_export.py).
+- Deliver the documentation items called out in [REFACTOR.md](REFACTOR.md): updated [README.md](README.md), module docstrings describing responsibilities, migration notes, and a brief note clarifying NeMo RL versus Megatron ownership boundaries.
 
-## First Execution Milestone
-- Reach a notebook state where one real model run can diagnose `SO-10482`, call deterministic tools in a valid sequence, compare at least two mitigation options, and produce a final recommendation with a trace that can be evaluated afterward.
+## Order Of Execution
+1. Introduce the new package tree and canonical trace and environment interfaces before moving behavior.
+2. Move runtime code next so the agent can still run one episode against the new contracts.
+3. Formalize environment state, validation, and reward inputs before splitting training and evaluation.
+4. Split rollout serialization and dataset views only after the trace contract is stable.
+5. Finish with notebook rewiring, docs, and verification.
+
+## Implementation Constraints
+- Prefer small typed modules, focused functions, side-effect-light code, explicit public interfaces, and no hidden global state.
+- Use dataclasses or Pydantic models for structured records rather than informal dict-only contracts.
+- Do not hard-code notebook-only assumptions or bury config in ad hoc cells; keep launch surfaces config-driven.
+- Keep large-job system configuration separate from experiment and reward semantics.
+- Preserve the workshop scenario behavior, the current late-order-recovery flow, deterministic tool semantics, and the ability to run a local end-to-end demo.
+- Do not introduce unnecessary feature expansion or speculative abstractions without immediate use.
+- Do not rewrite [src/scenario_data.py](src/scenario_data.py) unless environment formalization requires it.
+- Do not remove the notebook; demote it to a consumer.
+
+## Deliverables
+- Required code deliverables: new package structure under `src/`, canonical trajectory and event types, explicit environment state transitions, split runtime vs rollout vs training vs systems layers, updated imports and entrypoints, updated notebook wiring, and initial scalable training systems scaffolding for Megatron.
+- Required documentation deliverables: updated [README.md](README.md), module docstrings explaining responsibilities, migration notes summarizing what moved where, and a brief note clarifying NeMo RL versus Megatron responsibilities.
+- Optional but encouraged deliverables: a small CLI entrypoint for running one episode, a simple example of serialized trajectory output, a short architecture diagram in markdown, and one example large-job config profile.
+
+## Acceptance Criteria
+- Clear ownership boundaries exist across runtime, environment, rollouts, evaluation, training semantics, and training systems.
+- No catch-all replacement for [src/training_export.py](src/training_export.py) reappears; export, training, rollout, and systems concerns are split cleanly.
+- Structured typed event records are canonical across runtime, rollouts, training, and evaluation.
+- Environment transition rules and task semantics are explicit and are not hidden in notebook cells or evaluation helpers.
+- The notebook is demoted to a consumer of the library rather than a holder of core logic.
+- NeMo RL-facing training semantics and Megatron-facing training systems responsibilities are clearly separated.
+- Multi-turn RL readiness improves through support for successful and failed trajectory collection, dense reward shaping, rollout batching, and trainer ingestion.
+- Scalable training readiness improves through checkpoint boundaries, launch profiles, and Megatron-facing starter integrations.
+- One local episode still runs end-to-end for `SO-10482`, preserving the existing workshop scenario.
+
+## Main Risk To Watch
+The biggest implementation risk is moving too much behavior at once and breaking the demo. The safest approach is to land the shared contracts first, then migrate one concern at a time while keeping a thin compatibility path until the notebook and entrypoints have been switched over.
