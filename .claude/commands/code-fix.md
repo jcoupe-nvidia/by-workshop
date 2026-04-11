@@ -2,23 +2,21 @@
 description: Fix issues from code review and run tests
 ---
 
-Read `@REFACTOR.md`, `@PLAN.md`, `@CLAUDE.md`, and `@code-review-issues.md`.
+Read `@PLAN.md`, `@CLAUDE.md`, `@documents/RL_ARCHITECTURE.md`, and `@documents/NVIDIA_SOFTWARE_MAPPING.md`.
 
 Fix the issues identified in `@code-review-issues.md`.
 
 Prioritize fixes using the same review order:
 
-1. Best-practice large-scale RL architecture, with a strong focus on GRPO-readiness.
-2. Explainability of the code and clarity of responsibility boundaries across NVIDIA software:
-   - NeMo Agent Toolkit
-   - `openpipe-art`
-   - historical trainer-facing, rollout-shaping, and scale-out systems references where they still appear
-3. Strength and completeness of the observability layer.
+1. Best-practice RL architecture, with a strong focus on GRPO-readiness.
+2. Ensure the software defined in `documents/NVIDIA_SOFTWARE_MAPPING.md` is used for the layer and task described.
+3. Explainability of the code and clarity of responsibility boundaries across the layers defined in `documents/RL_ARCHITECTURE.md`.
+4. Strength and completeness of the observability layer.
 
 Before making changes:
 - review `@code-review-issues.md` and group the findings into concrete fix categories
 - confirm which findings are actionable code changes versus open questions or assumptions
-- preserve the ownership boundaries described in `@REFACTOR.md`
+- preserve the ownership boundaries described in `@documents/RL_ARCHITECTURE.md`
 - preserve the current phase status and sequencing in `@PLAN.md`
 - avoid speculative refactors that are not needed to resolve the review findings
 

@@ -4,7 +4,9 @@ description: Review code with RL architecture priorities
 
 Read `@PLAN.md`, `@CLAUDE.md`, `@documents/RL_ARCHITECTURE.md`, and `@documents/NVIDIA_SOFTWARE_MAPPING.md`.
 
-Review the current branch changes or working tree diff.
+Review the current state of the code on the `main` branch.
+
+Do not limit the review to the working tree diff or branch-local changes.
 
 Write the review findings to `@code-review-issues.md`.
 
@@ -21,6 +23,7 @@ During the review:
 - prioritize findings over summary
 - report only high-severity and medium-severity issues; ignore low-severity nits and minor style feedback
 - focus on architecture, behavioral risks, ownership violations, scalability risks, and missing interfaces rather than style nits
+- treat the checked-out `main` branch code as the review target unless the user explicitly says otherwise
 - evaluate whether the code cleanly separates:
   - runtime orchestration
   - environment and task semantics

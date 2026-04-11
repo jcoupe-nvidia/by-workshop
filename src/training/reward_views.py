@@ -218,8 +218,14 @@ def build_episode_reward_view(
             component_weights,
         )
 
-    # Compute trajectory-level reward as average of shaped step rewards
-    all_shaped = [sv.shaped_reward for sv in step_views]
+    # Step-level signal: average of per-step shaped rewards (excludes terminal)
+    step_shaped = [sv.shaped_reward for sv in step_views]
+    avg_step = round(
+        sum(step_shaped) / len(step_shaped) if step_shaped else 0.0, 4,
+    )
+
+    # Trajectory-level signal: average of all shaped rewards (steps + terminal)
+    all_shaped = list(step_shaped)
     if terminal_view is not None:
         all_shaped.append(terminal_view.shaped_reward)
 
@@ -231,8 +237,6 @@ def build_episode_reward_view(
     sw = stage_config.step_reward_weight
     tw = stage_config.trajectory_reward_weight
 
-    # Step-level component: average of individual step shaped rewards
-    avg_step = trajectory_reward  # same as avg of all shaped
     combined = round(sw * avg_step + tw * trajectory_reward, 4)
 
     return EpisodeRewardView(
