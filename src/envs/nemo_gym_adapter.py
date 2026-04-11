@@ -125,152 +125,20 @@ class LateOrderResourceServer(SimpleResourcesServer):
         collection. The response may contain tool calls (agent actions)
         or a final message (terminal action).
 
-        This method runs the same canonical validate -> repair -> reject
-        loop that the interactive runtime uses, and records each action
-        as a canonical Event via the session's EpisodeRecorder.  This
-        ensures training-time traces have the same semantics and
-        artifact format as run_agent_episode() traces.
+        This method extracts agent actions from the NeMo Gym response
+        and delegates to the rollouts-owned execution pipeline, which
+        runs the canonical validate → repair → reject → execute → record
+        loop. This keeps envs/ focused on environment validation
+        surfaces while rollouts/ owns the execution plumbing.
         """
-        from src.runtime.tools import TOOL_REGISTRY
-        from src.runtime.schemas import validate_tool_call
-        from src.runtime.fallbacks import try_repair, FallbackAction
+        from src.rollouts.nemo_gym_rollouts import (
+            AgentAction,
+            process_agent_actions,
+        )
 
-        # Look up the session-specific environment and recorder.
         session = self._get_session(body)
-        env = session.env
-        recorder = session.recorder
-
-        reward = 0.0
-        response = body.response
-
-        # Extract tool calls from the NeMo Gym response output.
-        # NeMo Gym wraps agent outputs as response items; we look for
-        # function_call items (tool calls) or message items (terminal).
-        if hasattr(response, "output") and response.output:
-            for item in response.output:
-                item_type = getattr(item, "type", None)
-
-                if item_type == "function_call":
-                    # Reconstruct the raw structured output for canonical
-                    # validation, matching the runtime's parse path.
-                    tool_name = getattr(item, "name", "")
-                    arguments = getattr(item, "arguments", "{}")
-                    if isinstance(arguments, str):
-                        try:
-                            arguments = json.loads(arguments)
-                        except json.JSONDecodeError:
-                            arguments = {}
-
-                    raw_output = json.dumps({
-                        "tool_call": {
-                            "name": tool_name,
-                            "arguments": arguments,
-                        }
-                    })
-
-                    # Run the canonical validate -> repair -> reject loop
-                    result = validate_tool_call(raw_output, TOOL_REGISTRY)
-                    was_repaired = False
-
-                    if hasattr(result, "error_type"):
-                        # Validation failed — attempt repair
-                        fb = try_repair(raw_output, TOOL_REGISTRY)
-                        if fb.action == FallbackAction.REPAIRED and fb.repaired:
-                            recorder.record_repair_attempt(
-                                original_output=raw_output,
-                                repaired_output=fb.repaired,
-                                repairs_applied=fb.repairs_applied,
-                                succeeded=True,
-                            )
-                            env.record_fallback_repair(succeeded=True)
-                            result = validate_tool_call(fb.repaired, TOOL_REGISTRY)
-                            was_repaired = True
-                        elif fb.action == FallbackAction.REJECTED:
-                            recorder.record_repair_attempt(
-                                original_output=raw_output,
-                                repaired_output=None,
-                                repairs_applied=fb.repairs_applied,
-                                succeeded=False,
-                            )
-                            recorder.record_reject(
-                                reason=fb.rejection_reason or "Unrecoverable output",
-                                raw_model_output=raw_output,
-                                repairs_attempted=fb.repairs_applied,
-                            )
-                            env.record_fallback_repair(succeeded=False)
-                            env.record_fallback_reject()
-                            # Record invalid action in the environment
-                            step = env.record_invalid(
-                                "rejected",
-                                fb.rejection_reason or "Unrecoverable output",
-                            )
-                            step_idx = len(env._step_rewards) - 1
-                            step_reward = env.get_step_reward(step_idx)
-                            if step_reward:
-                                reward += step_reward.total
-                            continue
-
-                    # If still invalid after repair, record and continue
-                    if hasattr(result, "error_type"):
-                        recorder.record_validation_error(
-                            error_type=result.error_type,
-                            message=result.message,
-                            raw_model_output=raw_output,
-                        )
-                        step = env.record_invalid(
-                            result.error_type,
-                            result.message,
-                        )
-                        step_idx = len(env._step_rewards) - 1
-                        step_reward = env.get_step_reward(step_idx)
-                        if step_reward:
-                            reward += step_reward.total
-                        continue
-
-                    # Valid tool call — record, execute, and step
-                    valid_name = result.tool_name
-                    valid_args = result.arguments
-                    recorder.record_tool_call(
-                        tool_name=valid_name,
-                        arguments=valid_args,
-                        thought=getattr(result, "thought", None),
-                        raw_model_output=raw_output,
-                    )
-                    recorder.increment_model_calls()
-
-                    if valid_name in TOOL_REGISTRY:
-                        fn, _params, _desc = TOOL_REGISTRY[valid_name]
-                        try:
-                            tool_result = fn(**valid_args)
-                        except Exception:
-                            tool_result = {"error": "execution_failed"}
-                        recorder.record_tool_result(valid_name, tool_result)
-                        env.step(valid_name, valid_args, tool_result,
-                                 was_repaired=was_repaired)
-                        step_idx = len(env._step_rewards) - 1
-                        step_reward = env.get_step_reward(step_idx)
-                        if step_reward:
-                            reward += step_reward.total
-
-                elif item_type == "message":
-                    # Agent produced a final message (terminal)
-                    content = getattr(item, "content", "")
-                    if isinstance(content, list):
-                        content = " ".join(
-                            getattr(c, "text", str(c)) for c in content
-                        )
-                    # Attempt to parse final answer from content
-                    final_answer = None
-                    try:
-                        final_answer = json.loads(content)
-                    except (json.JSONDecodeError, TypeError):
-                        final_answer = {"action": "unknown", "raw": str(content)}
-
-                    recorder.record_terminal("final_answer", final_answer=final_answer)
-                    env.terminate("final_answer", final_answer)
-                    terminal_reward = env.get_terminal_reward()
-                    if terminal_reward:
-                        reward += terminal_reward.total
+        actions = _extract_actions_from_response(body.response)
+        reward = process_agent_actions(actions, session.env, session.recorder)
 
         return BaseVerifyResponse(
             responses_create_params=body.responses_create_params,
@@ -313,12 +181,88 @@ class LateOrderResourceServer(SimpleResourcesServer):
 
         This is the primary way to inspect training-time traces in the
         same format used by the interactive runtime and offline eval.
+        Populates env_state_init from the session's environment so that
+        the episode carries the initial state snapshot for offline
+        analysis and durable serialization.
+
         Returns None if the session_id is not found.
         """
         session = _sessions.get(session_id)
         if session is None:
             return None
-        return session.recorder.build_episode()
+        episode = session.recorder.build_episode()
+        if not episode.env_state_init:
+            episode.env_state_init = session.env.get_initial_state_snapshot()
+        return episode
+
+    @staticmethod
+    def get_session_reward_summary(session_id: str):
+        """Retrieve the EpisodeRewardSummary from a rollout session's environment.
+
+        Returns None if the session_id is not found. This provides the
+        reward breakdown computed during real-time execution, avoiding
+        the need for a second enrichment pass.
+        """
+        session = _sessions.get(session_id)
+        if session is None:
+            return None
+        return session.env.get_episode_reward_summary()
+
+    @staticmethod
+    def get_session_env_snapshot(session_id: str) -> dict | None:
+        """Retrieve the final environment state snapshot from a rollout session.
+
+        Returns None if the session_id is not found.
+        """
+        session = _sessions.get(session_id)
+        if session is None:
+            return None
+        return session.env.get_state_snapshot()
+
+
+def _extract_actions_from_response(response: Any) -> list:
+    """Convert NeMo Gym response output items to AgentAction objects.
+
+    This is NeMo Gym protocol-specific extraction: it reads the
+    framework's response item types and converts them to the
+    framework-agnostic AgentAction format used by the rollouts-owned
+    execution pipeline.
+    """
+    from src.rollouts.nemo_gym_rollouts import AgentAction
+
+    actions: list[AgentAction] = []
+    if not hasattr(response, "output") or not response.output:
+        return actions
+
+    for item in response.output:
+        item_type = getattr(item, "type", None)
+
+        if item_type == "function_call":
+            tool_name = getattr(item, "name", "")
+            arguments = getattr(item, "arguments", "{}")
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except json.JSONDecodeError:
+                    arguments = {}
+            actions.append(AgentAction(
+                action_type="function_call",
+                tool_name=tool_name,
+                arguments=arguments,
+            ))
+
+        elif item_type == "message":
+            content = getattr(item, "content", "")
+            if isinstance(content, list):
+                content = " ".join(
+                    getattr(c, "text", str(c)) for c in content
+                )
+            actions.append(AgentAction(
+                action_type="message",
+                content=content,
+            ))
+
+    return actions
 
 
 def build_resource_server_config(

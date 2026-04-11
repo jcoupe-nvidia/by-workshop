@@ -2,7 +2,7 @@
 Notebook-facing GRPO orchestration helper.
 
 Wraps the non-notebook logic for a bounded GRPO training run:
-    - Repeated rollout collection from scripted traces
+    - NeMo Gym environment-backed rollout collection
     - Dataset assembly and stage filtering
     - GRPO trajectory group building with group-relative advantages
     - art backend training lifecycle (or dry-run mock)
@@ -13,14 +13,14 @@ This module keeps the notebook readable and preserves the repo's
 "notebook as consumer" rule.
 
 Owns:
-    - Rollout collection and variation for GRPO groups
+    - Rollout collection via NeMo Gym execution path
     - Training orchestration lifecycle
     - Artifact directory layout and path management
     - Compact result types for notebook display
 
 Does NOT own:
-    - Episode construction (see rollouts.scripted_traces)
-    - Reward enrichment (see rollouts.episode_runner)
+    - Execution pipeline (see rollouts.nemo_gym_rollouts)
+    - Environment state or transitions (see envs/)
     - GRPO grouping (see training.openpipe_art_adapter)
     - Reward shaping (see training.reward_views)
     - ATIF conversion (see runtime.atif_adapter)
@@ -36,8 +36,8 @@ from typing import Any
 
 import art
 
-from src.rollouts.scripted_traces import build_successful_episode, build_repair_episode
-from src.rollouts.episode_runner import enrich_episode, EnrichedEpisodeResult
+from src.rollouts.nemo_gym_rollouts import collect_nemo_gym_rollouts
+from src.rollouts.episode_runner import EnrichedEpisodeResult
 from src.rollouts.export_adapters import (
     episode_to_atif_trajectory,
     save_atif_trajectories_jsonl,
@@ -139,29 +139,26 @@ def collect_enriched_rollouts(
     num_rollouts: int = 4,
     include_repairs: bool = True,
 ) -> list[EnrichedEpisodeResult]:
-    """Collect enriched episodes from scripted traces for GRPO grouping.
+    """Collect enriched episodes via NeMo Gym environment-backed execution.
 
-    Builds a mix of successful and repair episodes to give the GRPO group
-    diversity in trajectory quality. All episodes target SO-10482.
+    Runs scripted action sequences through the NeMo Gym execution
+    pipeline (validate → repair → reject → execute → record) with the
+    environment computing rewards in real-time. This exercises the
+    documented NVIDIA ownership split: NeMo Gym owns training-time
+    execution and rollout collection rather than training on canned
+    trajectories.
 
     Args:
         num_rollouts: Total number of episodes to collect.
         include_repairs: Whether to include repair episodes in the mix.
 
     Returns:
-        List of EnrichedEpisodeResult, enriched with environment rewards.
+        List of EnrichedEpisodeResult from environment-backed execution.
     """
-    results: list[EnrichedEpisodeResult] = []
-
-    for i in range(num_rollouts):
-        if include_repairs and i % 2 == 1:
-            episode = build_repair_episode()
-        else:
-            episode = build_successful_episode()
-        enriched = enrich_episode(episode)
-        results.append(enriched)
-
-    return results
+    return collect_nemo_gym_rollouts(
+        num_rollouts=num_rollouts,
+        include_repairs=include_repairs,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -199,7 +196,7 @@ def build_grpo_group_from_rollouts(
             episode=result.episode,
             reward_summary=result.reward_summary,
             stage=stage,
-            metadata={"source": "scripted_rollout"},
+            metadata={"source": "nemo_gym_rollout"},
         )
         records.append(record)
 
@@ -310,7 +307,7 @@ def run_grpo_notebook(
     """Run a complete GRPO training cycle for the notebook.
 
     This is the main entry point for notebook cells. It orchestrates:
-        1. Collect enriched rollouts from scripted traces
+        1. Collect enriched rollouts via NeMo Gym environment-backed execution
         2. Build GRPO trajectory group with group-relative advantages
         3. Export ATIF traces and trajectory group artifacts
         4. Execute training step (or dry-run mock)
