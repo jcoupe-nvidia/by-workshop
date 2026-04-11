@@ -9,12 +9,12 @@ The underlying tool implementations remain unchanged — this module adds
 the NAT Function interface on top of them.
 
 Owns:
-    - Pydantic input/output models per tool
     - NAT Function wrappers via LambdaFunction
-    - NAT-compatible tool registry and OpenAI-style tool definitions
+    - NAT-compatible tool registry and FunctionGroup dispatch
 
 Does NOT own:
     - Tool implementations (see runtime.tools)
+    - Pydantic input models or OpenAI-style tool definitions (see shared.tool_schemas)
     - Agent orchestration or prompt policy
     - Reward semantics or training concerns
 """
@@ -27,46 +27,10 @@ from nat.builder.function_info import FunctionInfo
 from nat.data_models.function import EmptyFunctionConfig
 
 from src.runtime.tools import TOOL_REGISTRY
-
-
-# ---------------------------------------------------------------------------
-# Pydantic input models (one per tool)
-# ---------------------------------------------------------------------------
-
-class GetOrderInput(BaseModel):
-    order_id: str = Field(description="The sales order ID to look up.")
-
-class GetShipmentStatusInput(BaseModel):
-    order_id: str = Field(description="The order ID to check shipment status for.")
-
-class GetInventoryInput(BaseModel):
-    sku: str = Field(description="The SKU to check inventory for.")
-    dc_id: str = Field(description="The distribution center ID.")
-
-class FindAlternateInventoryInput(BaseModel):
-    sku: str = Field(description="The SKU to search for.")
-    region: str = Field(description="Region to search. Use 'ALL' for all regions.")
-
-class GetTransferEtaInput(BaseModel):
-    from_dc: str = Field(description="Source distribution center ID.")
-    to_dc: str = Field(description="Destination distribution center ID.")
-    sku: str = Field(description="The SKU to transfer.")
-    qty: int = Field(description="Quantity to transfer.")
-
-class GetSupplierExpediteOptionsInput(BaseModel):
-    sku: str = Field(description="The SKU to get expedite options for.")
-    qty: int = Field(description="Quantity needed.")
-
-class GetFulfillmentCapacityInput(BaseModel):
-    dc_id: str = Field(description="Distribution center ID.")
-    date: str = Field(description="Date to check capacity for (YYYY-MM-DD).")
-
-class ScoreRecoveryOptionsInput(BaseModel):
-    options: list[dict[str, Any]] = Field(description="List of recovery option dicts to score.")
-    objective: str = Field(description="Scoring objective: 'minimize_delay', 'minimize_cost', or 'balanced'.")
-
-class RecommendActionInput(BaseModel):
-    context: dict[str, Any] = Field(description="Dict with 'best_option', 'order', and 'objective' keys.")
+from src.shared.tool_schemas import (
+    TOOL_INPUT_MODELS,
+    build_openai_tool_definitions,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -75,23 +39,6 @@ class RecommendActionInput(BaseModel):
 
 class ToolOutput(BaseModel):
     result: dict[str, Any] = Field(description="Tool execution result.")
-
-
-# ---------------------------------------------------------------------------
-# Input model registry (tool_name -> input model class)
-# ---------------------------------------------------------------------------
-
-TOOL_INPUT_MODELS: dict[str, type[BaseModel]] = {
-    "get_order": GetOrderInput,
-    "get_shipment_status": GetShipmentStatusInput,
-    "get_inventory": GetInventoryInput,
-    "find_alternate_inventory": FindAlternateInventoryInput,
-    "get_transfer_eta": GetTransferEtaInput,
-    "get_supplier_expedite_options": GetSupplierExpediteOptionsInput,
-    "get_fulfillment_capacity": GetFulfillmentCapacityInput,
-    "score_recovery_options": ScoreRecoveryOptionsInput,
-    "recommend_action": RecommendActionInput,
-}
 
 
 # ---------------------------------------------------------------------------
@@ -204,26 +151,5 @@ async def invoke_tool_via_group(
 # ---------------------------------------------------------------------------
 # OpenAI-style tool definitions for ATIF agent.tool_definitions
 # ---------------------------------------------------------------------------
-
-def build_openai_tool_definitions() -> list[dict[str, Any]]:
-    """Build OpenAI function-calling-style tool definitions from Pydantic schemas.
-
-    These are used in ATIF Trajectory.agent.tool_definitions and in
-    the system prompt for structured tool calling.
-    """
-    definitions = []
-    for tool_name, input_model in TOOL_INPUT_MODELS.items():
-        _fn, _params, description = TOOL_REGISTRY[tool_name]
-        schema = input_model.model_json_schema()
-        # Remove pydantic metadata keys that aren't part of OpenAI spec
-        schema.pop("title", None)
-
-        definitions.append({
-            "type": "function",
-            "function": {
-                "name": tool_name,
-                "description": description,
-                "parameters": schema,
-            },
-        })
-    return definitions
+# Re-exported from src.shared.tool_schemas for backward compatibility.
+# build_openai_tool_definitions is imported at the top of this module.

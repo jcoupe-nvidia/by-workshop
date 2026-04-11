@@ -31,7 +31,7 @@ from src.rollouts.trace_types import (
     ToolCallPayload,
     RepairAttemptPayload,
 )
-from src.envs.rewards import EpisodeRewardSummary
+from src.envs.rewards import EpisodeRewardSummary, summarize_episode_rewards
 from src.rollouts.episode_runner import EnrichedEpisodeResult
 from src.training.curriculum import StageConfig, TrainingStage
 
@@ -181,9 +181,18 @@ def build_training_dataset(
             # Truncate episode if needed for stage's max_episode_length
             episode = _maybe_truncate(result.episode, stage_config.max_episode_length)
 
+            # When truncation happened, derive a matching truncated reward
+            # summary so short-horizon RL trains on partial rewards only.
+            if episode is not result.episode:
+                reward_summary = _truncate_reward_summary(
+                    result.reward_summary, episode,
+                )
+            else:
+                reward_summary = result.reward_summary
+
             records.append(TrainingRecord(
                 episode=episode,
-                reward_summary=result.reward_summary,
+                reward_summary=reward_summary,
                 stage=stage_config.stage,
                 metadata={
                     "original_task_id": result.episode.task_id,
@@ -354,3 +363,19 @@ def _maybe_truncate(episode: Episode, max_tool_calls: int) -> Episode:
         metadata={**episode.metadata, "truncated_at": max_tool_calls},
     )
     return truncated
+
+
+def _truncate_reward_summary(
+    full_summary: EpisodeRewardSummary,
+    truncated_episode: Episode,
+) -> EpisodeRewardSummary:
+    """Derive a reward summary matching a truncated episode.
+
+    Slices step_rewards to the number of valid tool calls retained in the
+    truncated episode, drops terminal_reward (truncated episodes have no
+    terminal), and recomputes totals. This ensures short-horizon RL data
+    pairs partial trajectories with partial rewards.
+    """
+    retained_steps = truncated_episode.metrics.valid_tool_calls
+    sliced_step_rewards = full_summary.step_rewards[:retained_steps]
+    return summarize_episode_rewards(sliced_step_rewards, terminal_reward=None)

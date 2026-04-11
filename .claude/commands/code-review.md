@@ -8,7 +8,7 @@ Review the current state of the code on the `main` branch.
 
 Do not limit the review to the working tree diff or branch-local changes.
 
-Write the review findings to `@code-review-issues.md`.
+Write the review findings and recommended fixes to `@code-review-issues.md`.
 
 Do not commit `code-review-issues.md`; treat it as review output only.
 
@@ -24,6 +24,15 @@ During the review:
 - report only high-severity and medium-severity issues; ignore low-severity nits and minor style feedback
 - focus on architecture, behavioral risks, ownership violations, scalability risks, and missing interfaces rather than style nits
 - treat the checked-out `main` branch code as the review target unless the user explicitly says otherwise
+- review the concrete code paths that implement the behavior instead of inferring intent from filenames, comments, or docs alone
+- follow data flow and ownership boundaries across relevant modules before concluding that a responsibility is misplaced or missing
+- make every finding evidence-based: cite the affected file or code path, describe the observed behavior, and explain the user or system impact
+- include a specific recommended fix for every finding; prefer the smallest change or design adjustment that would materially address the issue
+- avoid duplicate or overlapping findings; collapse related symptoms into a single higher-signal issue when they share the same root cause
+- distinguish confirmed issues from assumptions or speculative concerns; move uncertainty into `Open Questions`
+- prioritize correctness, reliability, safety, and regression risk over hypothetical future improvements
+- check whether tests, assertions, or observability are sufficient to catch the issue or prevent regressions when that materially affects severity
+- if no high-severity or medium-severity issues are found, say so explicitly instead of forcing findings
 - evaluate whether the code cleanly separates:
   - runtime orchestration
   - environment and task semantics
@@ -57,7 +66,13 @@ Return the review in this format:
 
 ## Findings
 - list only high-severity and medium-severity issues, ordered by severity
-- for each issue, include the affected file, concrete evidence from the code or diff, and why the issue matters
+- if there are no such issues, state `No high-severity or medium-severity findings.`
+- for each issue, include:
+  - severity
+  - affected file or code path
+  - concrete evidence from the code or diff
+  - why the issue matters
+  - a recommended fix that is specific and actionable
 
 ## Open Questions
 - list assumptions, ambiguities, or missing context that affect confidence

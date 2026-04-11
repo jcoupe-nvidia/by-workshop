@@ -44,13 +44,16 @@ from src.rollouts.trace_types import (
     RepairAttemptPayload,
     RejectPayload,
 )
-from src.runtime.nat_tools import build_openai_tool_definitions
+from src.shared.tool_schemas import build_openai_tool_definitions, build_default_system_prompt
 from src.training.curriculum import StageConfig, TrainingStage
 from src.training.reward_views import (
     EpisodeRewardView,
     build_episode_reward_view,
 )
 from src.training.datasets import TrainingRecord
+
+_GROUP_METADATA_ATTR = "_repo_group_metadata"
+_GROUP_METRICS_ATTR = "_repo_group_metrics"
 
 
 # ---------------------------------------------------------------------------
@@ -233,14 +236,13 @@ def episode_to_art_trajectory(
 
 
 def _extract_system_content(episode: Episode) -> str:
-    """Extract the system prompt from episode events, or return a default."""
-    for event in episode.events:
-        if event.event_type == EventType.USER_TASK:
-            # The system prompt is typically set before the user task;
-            # for now use a sensible default since the runtime builds it.
-            break
-    from src.runtime.prompts import build_system_prompt
-    return build_system_prompt()
+    """Extract the system prompt from episode events, or return a default.
+
+    Uses the repo-owned default prompt from shared.tool_schemas rather than
+    importing the runtime prompt builder, keeping the training layer
+    independent of NAT runtime machinery.
+    """
+    return build_default_system_prompt()
 
 
 def _build_art_tools() -> list[dict[str, Any]]:
@@ -305,17 +307,16 @@ def training_batch_to_art_group(
         training_record_to_art_trajectory(record, stage_config)
         for record in records
     ]
-    return art.TrajectoryGroup(
-        trajectories=trajectories,
-        metadata={"stage": stage_config.stage.value},
-        metrics={
-            "num_trajectories": len(trajectories),
-            "avg_reward": (
-                sum(t.reward for t in trajectories) / len(trajectories)
-                if trajectories else 0.0
-            ),
-        },
-    )
+    group = art.TrajectoryGroup(trajectories)
+    _set_group_metadata(group, {"stage": stage_config.stage.value})
+    _set_group_metrics(group, {
+        "num_trajectories": len(trajectories),
+        "avg_reward": (
+            sum(t.reward for t in trajectories) / len(trajectories)
+            if trajectories else 0.0
+        ),
+    })
+    return group
 
 
 def enriched_episodes_to_art_group(
@@ -337,7 +338,7 @@ def enriched_episodes_to_art_group(
     for i, episode in enumerate(episodes):
         reward = rewards[i] if rewards is not None else None
         trajectories.append(episode_to_art_trajectory(episode, reward=reward))
-    return art.TrajectoryGroup(trajectories=trajectories)
+    return art.TrajectoryGroup(trajectories)
 
 
 # ---------------------------------------------------------------------------
@@ -408,22 +409,21 @@ def build_grpo_trajectory_group(
 
             trajectories.append(traj)
 
-    return art.TrajectoryGroup(
-        trajectories=trajectories,
-        metadata={
-            "stage": stage_config.stage.value,
-            "method": "grpo",
-            "group_size": group_size,
-        },
-        metrics={
-            "num_trajectories": len(trajectories),
-            "num_tasks": len(by_task),
-            "avg_reward": (
-                sum(t.reward for t in trajectories) / len(trajectories)
-                if trajectories else 0.0
-            ),
-        },
-    )
+    group = art.TrajectoryGroup(trajectories)
+    _set_group_metadata(group, {
+        "stage": stage_config.stage.value,
+        "method": "grpo",
+        "group_size": group_size,
+    })
+    _set_group_metrics(group, {
+        "num_trajectories": len(trajectories),
+        "num_tasks": len(by_task),
+        "avg_reward": (
+            sum(t.reward for t in trajectories) / len(trajectories)
+            if trajectories else 0.0
+        ),
+    })
+    return group
 
 
 def get_per_step_rewards(view: EpisodeRewardView) -> list[float]:
@@ -468,10 +468,9 @@ def build_sft_art_group(records: list[TrainingRecord]) -> art.TrajectoryGroup:
         An art.TrajectoryGroup with SFT trajectories.
     """
     trajectories = [build_sft_art_trajectory(r) for r in records]
-    return art.TrajectoryGroup(
-        trajectories=trajectories,
-        metadata={"training_mode": "sft"},
-    )
+    group = art.TrajectoryGroup(trajectories)
+    _set_group_metadata(group, {"training_mode": "sft"})
+    return group
 
 
 # ---------------------------------------------------------------------------
@@ -504,4 +503,49 @@ def save_art_group_jsonl(
     trajectories), suitable for art's batch ingestion.
     """
     with open(path, "w") as f:
-        f.write(group.model_dump_json(warnings="none") + "\n")
+        payload = group.model_dump(warnings="none")
+        metadata = get_group_metadata(group)
+        metrics = get_group_metrics(group)
+        if metadata:
+            payload["metadata"] = metadata
+        if metrics:
+            payload["metrics"] = metrics
+        f.write(json.dumps(payload) + "\n")
+
+
+def get_group_metadata(group: art.TrajectoryGroup) -> dict[str, Any]:
+    """Return group metadata across openpipe-art versions."""
+    metadata = getattr(group, "metadata", None)
+    if isinstance(metadata, dict):
+        return metadata
+    stored = getattr(group, _GROUP_METADATA_ATTR, None)
+    return stored if isinstance(stored, dict) else {}
+
+
+def get_group_metrics(group: art.TrajectoryGroup) -> dict[str, Any]:
+    """Return group metrics across openpipe-art versions."""
+    metrics = getattr(group, "metrics", None)
+    if isinstance(metrics, dict):
+        return metrics
+    stored = getattr(group, _GROUP_METRICS_ATTR, None)
+    return stored if isinstance(stored, dict) else {}
+
+
+def _set_group_metadata(group: art.TrajectoryGroup, values: dict[str, Any]) -> None:
+    """Store group metadata on versions with and without native support."""
+    metadata = getattr(group, "metadata", None)
+    if isinstance(metadata, dict):
+        metadata.update(values)
+        return
+    current = get_group_metadata(group)
+    object.__setattr__(group, _GROUP_METADATA_ATTR, {**current, **values})
+
+
+def _set_group_metrics(group: art.TrajectoryGroup, values: dict[str, Any]) -> None:
+    """Store group metrics on versions with and without native support."""
+    metrics = getattr(group, "metrics", None)
+    if isinstance(metrics, dict):
+        metrics.update(values)
+        return
+    current = get_group_metrics(group)
+    object.__setattr__(group, _GROUP_METRICS_ATTR, {**current, **values})
