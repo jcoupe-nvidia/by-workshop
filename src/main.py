@@ -98,7 +98,6 @@ def _check_imports() -> None:
     # Other packages
     import src.training
     import src.training.curriculum
-    import src.systems
     import src.eval
 
     # Backward-compatible shims

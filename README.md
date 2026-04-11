@@ -2,7 +2,7 @@
 
 Notebook-centric workshop repo for agentic supply-chain workflows on the NVIDIA stack.
 
-The repository is being refactored from a custom notebook-led demo into a library that uses the actual NVIDIA stack for runtime orchestration, rollout collection, post-training, and scalable training systems. The target end state is one late-order-recovery scenario implemented with deterministic tools, explicit skills, structured tool calling, fallback handling, sequence-sensitive evaluation, and real NVIDIA-library-backed integration paths.
+The repository is being refactored from a custom notebook-led demo into a library that uses the actual NVIDIA stack for runtime orchestration, rollout collection, and post-training. The target end state is one late-order-recovery scenario implemented with deterministic tools, explicit skills, structured tool calling, fallback handling, sequence-sensitive evaluation, and real NVIDIA-library-backed integration paths.
 
 ## What This Repo Demonstrates
 
@@ -11,7 +11,7 @@ The repository is being refactored from a custom notebook-led demo into a librar
 - Nemotron-style structured tool calling with validation and dependency checks
 - Repair/reject fallback handling for malformed tool outputs
 - Sequence-sensitive evaluation and training-oriented export
-- Ongoing migration to real `NeMo Agent Toolkit`, repo-owned canonical rollouts, and `openpipe-art`, with older trainer-facing, rollout-shaping, and scale-out systems references preserved only as historical context where useful
+- Ongoing migration to real `NeMo Agent Toolkit`, repo-owned canonical rollouts, and `openpipe-art`
 
 ## Active Environment Stack
 
@@ -25,7 +25,7 @@ The current `environment.yaml` installs:
 
 - package installs for `nvidia-nat`, `nemo-gym`, and `openpipe-art`
 
-Earlier planning docs may still mention older trainer-facing, rollout-shaping, or scale-out systems framing because they originally explained the roles of training semantics, rollout infrastructure, and large-scale systems. Those references are now historical unless explicitly called out as active again.
+Earlier planning docs may still mention older trainer-facing or rollout-shaping framing because they originally explained the roles of training semantics and rollout infrastructure. Those references are historical context only.
 
 ## Core Scenario
 
@@ -47,7 +47,7 @@ The agent investigates whether the original source DC can still fulfill the orde
 - `src/envs/`: explicit task environment state, transitions, validators, and rewards
 - `src/rollouts/`: canonical trace types plus repo-owned rollout and serialization logic
 - `src/training/`: `openpipe-art`-facing training semantics
-- `src/systems/`: legacy or historical systems scaffolding, if still present
+- ~~`src/systems/`~~: removed in Phase 6 — no active code depended on it
 - `src/eval/`: offline evaluation and reporting
 - `src/main.py`: entrypoint for local checks and episode execution
 - legacy top-level modules such as `src/tools.py` and `src/agent_loop.py` currently remain as compatibility shims during migration
@@ -130,19 +130,17 @@ When you run the later notebook sections, the repo can produce:
 - seven-dimension trajectory evaluations
 - canonical episodes and trajectory artifacts intended for `openpipe-art`-oriented consumption
 - rollout artifacts intended for the repo's own canonical trace collection layer
-- historical notes about the earlier trainer-facing, rollout-shaping, and scale-out systems framing where they help explain the current architecture
 
 The notebook writes generated training artifacts under `artifacts/` when those export cells are executed.
 
 ## Migration Status
 
-The repo is still mid-migration from local stand-ins and older stack assumptions to the current NAT + canonical rollouts + `openpipe-art` path.
+The repo is mid-migration from local stand-ins to the current NAT + canonical rollouts + `openpipe-art` path.
 
-- `Phase 1` remains largely valid, but its canonical contracts still need to be revalidated against the real rollout and training/export integrations, plus any legacy systems notes that remain in the tree.
-- `Phase 2` remains valid structurally, but its public wording and adapters should stop implying a handoff to an earlier rollout or trainer stack.
-- `Phase 3` must be revisited so the environment and rewards are described as feeding canonical traces and `openpipe-art`, not an earlier `NAT -> rollout -> trainer` path.
-- `Phase 4` must be revisited so the rollout layer is treated as the active repo-owned trace layer rather than a temporary stand-in for an external rollout stack.
-- `Phase 5` must be revisited most heavily because the active training/export path should now be `openpipe-art`-first.
+- **Phases 1–5**: Complete — canonical contracts, NAT runtime, environment, rollouts, and training semantics are in place.
+- **Phase 6**: Complete — `src/systems/` removed, scale-out config sketch deleted, no active path depends on earlier systems assumptions.
+- **Phase 7**: Pending — rebuild offline evaluation on top of new contracts.
+- **Phase 8**: Pending — demote notebook to consumer and finish public surfaces.
 
 ## Scope
 

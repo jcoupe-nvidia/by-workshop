@@ -8,8 +8,6 @@ downstream training workflows:
                                    actions, and rewards for post-training flows.
     - Reward computation:          Per-step and trajectory-level reward signals
                                    derived from the seven evaluation dimensions.
-    - Legacy systems config:       A historical config sketch that references
-                                   the exported data without driving active code paths.
 
 Integration is narrow and demonstrative -- the goal is to show *what* gets
 exported and *how* reward signals are shaped, not to build a full pipeline.
@@ -317,89 +315,7 @@ def print_reward_breakdown(
 
 
 # ---------------------------------------------------------------------------
-# 4. Reference scale-out config sketch
-# ---------------------------------------------------------------------------
-
-def reference_scaleout_config_sketch(
-    num_trajectories: int = 100,
-    model_name: str = "nvidia/nemotron-3-nano",
-) -> dict[str, Any]:
-    """Generate a reference scale-out config sketch for illustration only.
-
-    This is a conceptual reference, not a runnable config. It shows how the
-    exported trajectory data and reward signals could be wired into a larger
-    training system without making that system an active dependency.
-
-    Args:
-        num_trajectories: Expected number of training trajectories.
-        model_name: Base model for fine-tuning.
-
-    Returns:
-        Dict representing the config sketch.
-    """
-    return {
-        "# NOTE": "Reference scale-out systems sketch -- not an active implementation path",
-        "model": {
-            "name": model_name,
-            "type": "causal_lm",
-            "precision": "bf16",
-        },
-        "training": {
-            "method": "ppo",
-            "num_episodes": num_trajectories,
-            "max_steps_per_episode": 15,
-            "batch_size": 4,
-            "learning_rate": 1e-6,
-            "kl_penalty_coeff": 0.02,
-            "discount_factor": 0.99,
-            "gae_lambda": 0.95,
-        },
-        "reward": {
-            "type": "composite",
-            "step_reward_weight": 0.4,
-            "trajectory_reward_weight": 0.6,
-            "components": {
-                "tool_validity": {"weight": 0.25, "type": "binary"},
-                "sequence_correctness": {"weight": 0.35, "type": "dependency_check"},
-                "tool_accuracy": {"weight": 0.20, "type": "argument_match"},
-                "recovery_bonus": {"weight": 0.20, "type": "fallback_success"},
-            },
-            "trajectory_components": {
-                dim: {"weight": w}
-                for dim, w in DIMENSION_WEIGHTS.items()
-            },
-        },
-        "data": {
-            "format": "jsonl",
-            "trajectory_file": "trajectories/training_export.jsonl",
-            "fields": ["observation", "action", "reward", "done"],
-        },
-        "infrastructure": {
-            "gpus": 8,
-            "gpu_type": "H100",
-            "tensor_parallel": 2,
-            "pipeline_parallel": 1,
-            "data_parallel": 4,
-            "note": (
-                "8x H100 target environment. Tensor parallelism splits the model "
-                "across 2 GPUs; data parallelism processes 4 trajectory batches "
-                "concurrently. For this small model, the setup is conservative -- "
-                "the same cluster could handle larger models with adjusted parallelism."
-            ),
-        },
-        "opencode_inspired_architecture": {
-            "role": (
-                "OpenCode-inspired architecture implemented locally for "
-                "visibility, trace capture, and evaluation"
-            ),
-            "trace_format": "AgentTrace with ToolCallRecord steps",
-            "evaluation_format": "TrajectoryEvaluation with 7 DimensionScores",
-        },
-    }
-
-
-# ---------------------------------------------------------------------------
-# 5. Export to file helpers
+# 4. Export to file helpers
 # ---------------------------------------------------------------------------
 
 def save_trajectories_jsonl(
@@ -417,13 +333,3 @@ def save_trajectories_jsonl(
             f.write(trajectory_to_jsonl(traj) + "\n")
 
 
-def save_training_config(config: dict[str, Any], path: str) -> None:
-    """Write a reference scale-out config sketch to a JSON file.
-
-    Args:
-        config: Config dict from reference_scaleout_config_sketch.
-        path: Output file path.
-    """
-    with open(path, "w") as f:
-        json.dump(config, f, indent=2)
-        f.write("\n")
