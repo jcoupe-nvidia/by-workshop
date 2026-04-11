@@ -6,8 +6,9 @@
 - **Phase 3** is **complete**.
 - **Phase 4** is **complete**.
 - **Phase 5** is **complete**.
-- **Phase 6** is the next phase to implement, but it has been re-scoped to remove or quarantine outdated scale-out-systems-first assumptions.
-- **Phases 7-8** are pending.
+- **Phase 6** is **complete**.
+- **Phase 7** is the next phase to implement.
+- **Phase 8** is pending.
 
 ## Goal
 Reshape the repository from a flat, notebook-led demo into a small library with clear ownership boundaries while preserving the current scenario, deterministic tools, and end-to-end workshop flow described in [CLAUDE.md](CLAUDE.md). The active target stack is NAT for runtime orchestration, repo-owned canonical rollouts and traces, and `openpipe-art` for training-oriented exports and post-training discussion.
@@ -83,10 +84,13 @@ flowchart LR
 - Treat `openpipe-art` as the owner of reward views, datasets, and staged training progression.
 - Design the training layer to support staged progression: SFT on successful trajectories, short-horizon RL with dense rewards, full multi-turn RL with sequence-aware rewards, and a robustness curriculum with malformed calls and dead ends.
 
-### 6. Remove or quarantine outdated systems assumptions (pending)
-- Decide whether [src/systems](src/systems) should be deleted, archived, or retained as clearly historical scaffolding.
-- Remove scale-out-systems-first language from active docs, exports, and public interfaces.
-- Ensure no training path depends on scale-out-systems-specific launch, checkpoint, or parallelism configuration in the current environment.
+### 6. Remove or quarantine outdated systems assumptions (complete)
+- Decided to delete [src/systems](src/systems) — it contained only an empty legacy docstring, no active code depended on it.
+- Removed `reference_scaleout_config_sketch()` and `save_training_config()` from [src/training_export.py](src/training_export.py).
+- Removed corresponding notebook cell (11d) and scale-out references from notebook intro, section 11 framing, pipeline diagram (11e), and export cell.
+- Removed `import src.systems` from [src/main.py](src/main.py) `_check_imports()`.
+- Updated [README.md](README.md) to remove scale-out-systems-first language from active descriptions and migration status.
+- No training path depends on scale-out-systems-specific launch, checkpoint, or parallelism configuration.
 
 ### 7. Rebuild offline evaluation on top of the new contracts (pending)
 - Split [src/evaluation.py](src/evaluation.py) into [src/eval/metrics.py](src/eval/metrics.py), [src/eval/reports.py](src/eval/reports.py), and, if needed, [src/eval/regression.py](src/eval/regression.py).
