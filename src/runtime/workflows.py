@@ -145,42 +145,22 @@ def _call_tool(ctx: WorkflowContext, workflow_name: str, tool_name: str, **kwarg
     return result
 
 
-# -- Workflow registry --------------------------------------------------------
+# -- Workflow registry (derived from directory-backed skills) -----------------
 
-WORKFLOW_NAMES = [
-    "diagnose_order_risk",
-    "assess_primary_fulfillment",
-    "evaluate_alternate_recovery_paths",
-    "synthesize_recommendation",
-]
+from src.runtime.skills.api import (
+    build_skill_order,
+    build_skill_tool_patterns,
+    build_skill_transitions,
+    list_skills,
+)
 
-# Allowed tool sequences per workflow
-WORKFLOW_TOOL_PATTERNS: dict[str, list[str]] = {
-    "diagnose_order_risk": ["get_order", "get_shipment_status"],
-    "assess_primary_fulfillment": ["get_inventory", "get_fulfillment_capacity"],
-    "evaluate_alternate_recovery_paths": [
-        "find_alternate_inventory",
-        "get_transfer_eta",
-        "get_supplier_expedite_options",
-    ],
-    "synthesize_recommendation": ["score_recovery_options", "recommend_action"],
-}
-
-# Valid workflow transitions: workflow -> set of workflows that may follow it
-WORKFLOW_TRANSITIONS: dict[str, set[str]] = {
-    "diagnose_order_risk": {"assess_primary_fulfillment"},
-    "assess_primary_fulfillment": {"evaluate_alternate_recovery_paths"},
-    "evaluate_alternate_recovery_paths": {"synthesize_recommendation"},
-    "synthesize_recommendation": set(),  # terminal
-}
-
-# Canonical ordering for the diagnostic flow
-WORKFLOW_ORDER = [
-    "diagnose_order_risk",
-    "assess_primary_fulfillment",
-    "evaluate_alternate_recovery_paths",
-    "synthesize_recommendation",
-]
+# Derive registries from SKILL.md frontmatter rather than hardcoding them.
+# This makes the skills directory the single source of truth for workflow
+# names, tool patterns, transitions, and ordering.
+WORKFLOW_ORDER = build_skill_order()
+WORKFLOW_NAMES = WORKFLOW_ORDER
+WORKFLOW_TOOL_PATTERNS = build_skill_tool_patterns()
+WORKFLOW_TRANSITIONS = build_skill_transitions()
 
 # Backward-compatible aliases for code that still uses "skill" naming
 SKILL_NAMES = WORKFLOW_NAMES
