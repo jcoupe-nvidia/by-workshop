@@ -24,6 +24,7 @@ Does NOT own:
 from __future__ import annotations
 
 import json
+import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -44,6 +45,14 @@ from src.rollouts.trace_types import Episode, EpisodeMetrics
 # NeMo Gym resource server (seed + verify protocol)
 # ---------------------------------------------------------------------------
 
+# Per-session environment state, keyed by stable session_id (UUID).
+# Module-level dict rather than class attribute because SimpleResourcesServer
+# is a Pydantic BaseModel, and Pydantic treats underscore-prefixed class
+# attributes as ModelPrivateAttr descriptors — which breaks dict operations
+# when accessed on the class.
+_sessions: dict[str, Any] = {}
+
+
 class LateOrderResourceServer(SimpleResourcesServer):
     """NeMo Gym resource server for the late-order-recovery environment.
 
@@ -60,18 +69,15 @@ class LateOrderResourceServer(SimpleResourcesServer):
     task semantics or reward logic.
     """
 
-    # Per-session environment state, keyed by session_id.
-    # In NeMo Gym's model, each rollout worker seeds a session and then
-    # calls verify() after each agent response.
-    _sessions: dict[str, Any] = {}
-
     async def seed_session(
         self, body: BaseSeedSessionRequest,
     ) -> BaseSeedSessionResponse:
         """Initialize a fresh environment for a rollout session.
 
         NeMo Gym calls this once per rollout episode before the agent
-        begins producing responses.
+        begins producing responses.  Returns a stable session_id so
+        verify() can look up the correct environment even under
+        concurrent rollout collection.
         """
         # Import here to avoid circular dependency
         from src.envs.late_order_env import LateOrderRecoveryEnv
@@ -80,13 +86,12 @@ class LateOrderResourceServer(SimpleResourcesServer):
         # Default order for the workshop scenario
         env.reset("SO-10482")
 
-        # Store env keyed by a session identifier.
-        # SimpleResourcesServer manages session middleware;
-        # we use the env object's id as a simple key.
-        session_id = str(id(env))
-        LateOrderResourceServer._sessions[session_id] = env
+        # Use a UUID so session identity is stable and unique across
+        # concurrent rollout workers (fixes parallel-safety issue).
+        session_id = str(uuid.uuid4())
+        _sessions[session_id] = env
 
-        return BaseSeedSessionResponse()
+        return BaseSeedSessionResponse(session_id=session_id)
 
     async def verify(self, body: BaseVerifyRequest) -> BaseVerifyResponse:
         """Compute a reward for the agent's response.
@@ -95,18 +100,18 @@ class LateOrderResourceServer(SimpleResourcesServer):
         collection. The response may contain tool calls (agent actions)
         or a final message (terminal action).
 
-        The reward is computed by stepping the repo-owned environment
-        and returning the environment's reward signal. This keeps reward
-        computation in the environment where it belongs, with NeMo Gym
-        owning only the collection infrastructure.
+        This method runs the same canonical validate -> repair -> reject
+        loop that the interactive runtime uses, so training-time traces
+        have the same semantics as run_agent_episode() traces. Invalid
+        calls, repairs, and rejects are recorded through the environment,
+        keeping rollout semantics aligned with the GRPO contract.
         """
-        from src.envs.late_order_env import LateOrderRecoveryEnv
-        from src.envs.rewards import compute_step_reward, compute_terminal_reward
+        from src.runtime.tools import TOOL_REGISTRY
+        from src.runtime.schemas import validate_tool_call
+        from src.runtime.fallbacks import try_repair, FallbackAction
 
-        # Find or create an environment for this request.
-        # In a full deployment NeMo Gym manages session affinity;
-        # here we use a simple lookup or create a fresh env.
-        env = self._get_or_create_env()
+        # Look up the session-specific environment.
+        env = self._get_session_env(body)
 
         reward = 0.0
         response = body.response
@@ -119,7 +124,8 @@ class LateOrderResourceServer(SimpleResourcesServer):
                 item_type = getattr(item, "type", None)
 
                 if item_type == "function_call":
-                    # Agent made a tool call
+                    # Reconstruct the raw structured output for canonical
+                    # validation, matching the runtime's parse path.
                     tool_name = getattr(item, "name", "")
                     arguments = getattr(item, "arguments", "{}")
                     if isinstance(arguments, str):
@@ -128,18 +134,63 @@ class LateOrderResourceServer(SimpleResourcesServer):
                         except json.JSONDecodeError:
                             arguments = {}
 
-                    # Execute through environment (step returns reward info)
-                    from src.runtime.tools import TOOL_REGISTRY
-                    if tool_name in TOOL_REGISTRY:
-                        fn, _params, _desc = TOOL_REGISTRY[tool_name]
+                    raw_output = json.dumps({
+                        "tool_call": {
+                            "name": tool_name,
+                            "arguments": arguments,
+                        }
+                    })
+
+                    # Run the canonical validate -> repair -> reject loop
+                    result = validate_tool_call(raw_output, TOOL_REGISTRY)
+                    was_repaired = False
+
+                    if hasattr(result, "error_type"):
+                        # Validation failed — attempt repair
+                        fb = try_repair(raw_output, TOOL_REGISTRY)
+                        if fb.action == FallbackAction.REPAIRED and fb.repaired:
+                            env.record_fallback_repair(succeeded=True)
+                            result = validate_tool_call(fb.repaired, TOOL_REGISTRY)
+                            was_repaired = True
+                        elif fb.action == FallbackAction.REJECTED:
+                            env.record_fallback_repair(succeeded=False)
+                            env.record_fallback_reject()
+                            # Record invalid action in the environment
+                            step = env.record_invalid(
+                                "rejected",
+                                fb.rejection_reason or "Unrecoverable output",
+                            )
+                            step_idx = len(env._step_rewards) - 1
+                            step_reward = env.get_step_reward(step_idx)
+                            if step_reward:
+                                reward += step_reward.total
+                            continue
+
+                    # If still invalid after repair, record and continue
+                    if hasattr(result, "error_type"):
+                        step = env.record_invalid(
+                            result.error_type,
+                            result.message,
+                        )
+                        step_idx = len(env._step_rewards) - 1
+                        step_reward = env.get_step_reward(step_idx)
+                        if step_reward:
+                            reward += step_reward.total
+                        continue
+
+                    # Valid tool call — execute and step the environment
+                    valid_name = result.tool_name
+                    valid_args = result.arguments
+                    if valid_name in TOOL_REGISTRY:
+                        fn, _params, _desc = TOOL_REGISTRY[valid_name]
                         try:
-                            tool_result = fn(**arguments)
+                            tool_result = fn(**valid_args)
                         except Exception:
                             tool_result = {"error": "execution_failed"}
-                        step = env.step(tool_name, arguments, tool_result)
-                        step_reward = env.get_step_reward(
-                            env._state.total_steps - 1
-                        )
+                        env.step(valid_name, valid_args, tool_result,
+                                 was_repaired=was_repaired)
+                        step_idx = len(env._step_rewards) - 1
+                        step_reward = env.get_step_reward(step_idx)
                         if step_reward:
                             reward += step_reward.total
 
@@ -168,16 +219,26 @@ class LateOrderResourceServer(SimpleResourcesServer):
             reward=round(reward, 4),
         )
 
-    def _get_or_create_env(self) -> Any:
-        """Get the most recently seeded environment, or create a fresh one."""
+    def _get_session_env(self, body: Any) -> Any:
+        """Look up the environment for the request's session.
+
+        Uses session_id from the request when available. Falls back to
+        creating a fresh environment only when no session has been seeded
+        (e.g. in unit tests).
+        """
         from src.envs.late_order_env import LateOrderRecoveryEnv
 
-        if LateOrderResourceServer._sessions:
-            # Return the most recently created session
-            session_id = list(LateOrderResourceServer._sessions.keys())[-1]
-            return LateOrderResourceServer._sessions[session_id]
+        # Try to extract session_id from the request body.
+        session_id = getattr(body, "session_id", None)
+        if session_id and session_id in _sessions:
+            return _sessions[session_id]
 
-        # No session seeded yet — create a default one
+        # Fallback for tests or single-session use: return the only
+        # seeded session if exactly one exists.
+        if len(_sessions) == 1:
+            return next(iter(_sessions.values()))
+
+        # No session found — create a default one (demo-only path).
         env = LateOrderRecoveryEnv()
         env.reset("SO-10482")
         return env
