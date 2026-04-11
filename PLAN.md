@@ -7,8 +7,8 @@
 - **Phase 4** is **complete**.
 - **Phase 5** is **complete**.
 - **Phase 6** is **complete**.
-- **Phase 7** is the next phase to implement.
-- **Phase 8** is pending.
+- **Phase 7** is **complete**.
+- **Phase 8** is the next phase to implement.
 
 ## Goal
 Reshape the repository from a flat, notebook-led demo into a small library with clear ownership boundaries while preserving the current scenario, deterministic tools, and end-to-end workshop flow described in [CLAUDE.md](CLAUDE.md). The active target stack is NAT for runtime orchestration, repo-owned canonical rollouts and traces, and `openpipe-art` for training-oriented exports and post-training discussion.
@@ -92,10 +92,14 @@ flowchart LR
 - Updated [README.md](README.md) to remove scale-out-systems-first language from active descriptions and migration status.
 - No training path depends on scale-out-systems-specific launch, checkpoint, or parallelism configuration.
 
-### 7. Rebuild offline evaluation on top of the new contracts (pending)
-- Split [src/evaluation.py](src/evaluation.py) into [src/eval/metrics.py](src/eval/metrics.py), [src/eval/reports.py](src/eval/reports.py), and, if needed, [src/eval/regression.py](src/eval/regression.py).
-- Keep offline reporting human-facing and post hoc; move training-relevant reward facts into [src/envs/rewards.py](src/envs/rewards.py) and [src/training/reward_views.py](src/training/reward_views.py).
-- Preserve the current workshop dimensions where they still make sense, but make them consume canonical traces instead of bespoke `AgentTrace` structures.
+### 7. Rebuild offline evaluation on top of the new contracts (complete)
+- Split [src/evaluation.py](src/evaluation.py) into [src/eval/metrics.py](src/eval/metrics.py) and [src/eval/reports.py](src/eval/reports.py). No regression module was needed at this stage.
+- Evaluators now consume canonical `Episode` traces from [src/rollouts/trace_types.py](src/rollouts/trace_types.py) instead of backward-compatible `AgentTrace`.
+- Scenario-specific constants (`EXPECTED_ARGUMENTS`, `OPTIMAL_TOOL_SEQUENCE`) sourced from [src/envs/rewards.py](src/envs/rewards.py) — the single authority — eliminating duplication that existed in the old evaluation module.
+- Imports use canonical modules (`src.runtime.tools`, `src.runtime.workflows`, `src.envs.rewards`) directly, not backward-compatibility shims.
+- [src/evaluation.py](src/evaluation.py) converted to a backward-compat shim with an `AgentTrace` → `Episode` adapter so existing notebook and training-export imports keep working during the transition.
+- Kept offline reporting human-facing and post hoc; training-relevant reward semantics remain in [src/envs/rewards.py](src/envs/rewards.py) and [src/training/reward_views.py](src/training/reward_views.py).
+- All seven workshop dimensions preserved: skill selection, tool validity, tool accuracy, sequence correctness, task success, recovery quality, efficiency.
 
 ### 8. Demote the notebook and finish the public surfaces (pending)
 - Temporary notebook breakage is acceptable during earlier phases; do not spend effort preserving mid-migration cell/API compatibility while the runtime surface is still moving.
