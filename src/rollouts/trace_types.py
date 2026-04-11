@@ -31,9 +31,15 @@ An ``Episode`` groups:
 """
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
+
+
+def _mint_episode_id() -> str:
+    """Generate a stable, unique episode identifier."""
+    return str(uuid.uuid4())
 
 
 # ---------------------------------------------------------------------------
@@ -163,6 +169,11 @@ class Episode:
         - ``eval/`` computes offline metrics from episodes
 
     Attributes:
+        episode_id:     Stable unique identifier for this episode, minted at
+                        creation time. Threaded through serialization, NeMo Gym
+                        result rows, art trajectory metadata, and ATIF exports
+                        so that replay, regression analysis, and trainer/eval
+                        joins can key on a repo-owned identity.
         task_id:        Identifier for the task (e.g. "SO-10482").
         task_prompt:    The initial user-facing task description.
         model_id:       Which model produced this episode.
@@ -172,8 +183,9 @@ class Episode:
         metrics:        Aggregate summary metrics.
         metadata:       Arbitrary extra info (provenance, config, etc.).
     """
-    task_id: str
-    task_prompt: str
+    episode_id: str = field(default_factory=_mint_episode_id)
+    task_id: str = ""
+    task_prompt: str = ""
     model_id: str = ""
     env_state_init: dict[str, Any] = field(default_factory=dict)
     events: list[Event] = field(default_factory=list)

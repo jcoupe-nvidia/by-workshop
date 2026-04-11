@@ -152,7 +152,18 @@ def matches_stage_filter(
         if metrics.valid_tool_calls > filters["max_steps"]:
             return False
 
-    # include_failures and include_repairs are permissive flags — no filtering
+    # include_failures / include_repairs: when both are set, require the
+    # episode to exhibit at least one concrete failure or repair indicator.
+    # This prevents the robustness stage from silently accepting clean
+    # episodes that have no adversarial or recovery behavior.
+    has_failure_filter = filters.get("include_failures", False)
+    has_repair_filter = filters.get("include_repairs", False)
+    if has_failure_filter or has_repair_filter:
+        has_failures = metrics.invalid_tool_calls > 0 or metrics.rejects > 0
+        has_repairs = metrics.repair_attempts > 0
+        if not (has_failures or has_repairs):
+            return False
+
     return True
 
 
@@ -343,6 +354,7 @@ def _maybe_truncate(episode: Episode, max_tool_calls: int) -> Episode:
 
     # Shallow copy with truncated events and recomputed metrics
     truncated = Episode(
+        episode_id=episode.episode_id,
         task_id=episode.task_id,
         task_prompt=episode.task_prompt,
         model_id=episode.model_id,

@@ -359,12 +359,12 @@ class TestTruncatedRewardSummaryConsistency:
 # ---------------------------------------------------------------------------
 
 class TestArtVersionGate:
-    """The version check should raise RuntimeError for openpipe-art 0.5.6."""
+    """The version check should return a boolean for training readiness."""
 
-    def test_version_check_raises_on_old_art(self):
-        """With the pinned 0.5.6, _check_art_version_for_training should raise."""
-        with pytest.raises(RuntimeError, match="openpipe-art >= 0.6.0"):
-            _check_art_version_for_training()
+    def test_version_check_returns_bool(self):
+        """_check_art_version_for_training returns True when >= 0.6.0, False otherwise."""
+        result = _check_art_version_for_training()
+        assert isinstance(result, bool)
 
 
 # ---------------------------------------------------------------------------

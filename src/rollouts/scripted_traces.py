@@ -136,11 +136,16 @@ def build_successful_episode() -> Episode:
          "path_type": "supplier_expedite", "lead_days": 5,
          "cost_per_unit": 12.00, "total_cost": 10800.0,
          "feasible": True, "covers_full_qty": True},
+        {"source": "substitute:SKU-4090-B@DC-WEST-01",
+         "description": "substitute SKU-4090-B at DC-WEST-01",
+         "path_type": "substitute", "lead_days": 0,
+         "cost_per_unit": 0.0, "total_cost": 0.0,
+         "feasible": False, "covers_full_qty": False},
     ]
     scored = call(
         "score_recovery_options",
         {"options": options, "objective": "minimize_delay"},
-        "Score all recovery options to find the best path.",
+        "Score all recovery options including substitute SKU.",
     )
     rec = call(
         "recommend_action",
@@ -292,7 +297,7 @@ def build_repair_episode() -> Episode:
          {"sku": "SKU-4090", "qty": 900},
          "Check supplier expedite for the shortfall.")
 
-    # Step 9: score_recovery_options (clean)
+    # Step 9: score_recovery_options (clean, includes substitute)
     options = [
         {"source": "DC-EAST-02", "description": "dc_transfer from DC-EAST-02",
          "path_type": "dc_transfer", "lead_days": east_transfer["lead_days"],
@@ -304,11 +309,16 @@ def build_repair_episode() -> Episode:
          "path_type": "supplier_expedite", "lead_days": 7,
          "cost_per_unit": 8.00, "total_cost": 7200.0,
          "feasible": True, "covers_full_qty": True},
+        {"source": "substitute:SKU-4090-B@DC-WEST-01",
+         "description": "substitute SKU-4090-B at DC-WEST-01",
+         "path_type": "substitute", "lead_days": 0,
+         "cost_per_unit": 0.0, "total_cost": 0.0,
+         "feasible": False, "covers_full_qty": False},
     ]
     scored = call(
         "score_recovery_options",
         {"options": options, "objective": "minimize_delay"},
-        "Score recovery options.",
+        "Score recovery options including substitute.",
     )
 
     # Step 10: recommend_action (clean)

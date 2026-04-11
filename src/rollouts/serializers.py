@@ -147,6 +147,7 @@ def episode_to_dict(episode: Episode) -> dict[str, Any]:
         }
 
     return {
+        "episode_id": episode.episode_id,
         "task_id": episode.task_id,
         "task_prompt": episode.task_prompt,
         "model_id": episode.model_id,
@@ -267,6 +268,7 @@ def dict_to_episode(d: dict[str, Any]) -> Episode:
     )
 
     return Episode(
+        episode_id=d.get("episode_id", ""),
         task_id=d["task_id"],
         task_prompt=d.get("task_prompt", ""),
         model_id=d.get("model_id", ""),

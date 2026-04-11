@@ -335,6 +335,25 @@ def evaluate_alternate_recovery_paths(ctx: WorkflowContext) -> list[RecoveryPath
             feasible=opt["feasible"],
         ))
 
+    # Step 4: Consider substitute SKUs returned by find_alternate_inventory
+    for sub in alt_inv.get("substitutes", []):
+        sub_sku = sub.get("sku", sub.get("substitute_sku", "unknown"))
+        sub_dc = sub.get("dc_id", "unknown")
+        sub_available = sub.get("available", 0)
+        compatibility = sub.get("compatibility", "unknown")
+        feasible = (
+            sub_available >= primary.shortfall
+            and compatibility == "full"
+        )
+        paths.append(RecoveryPath(
+            source=f"substitute:{sub_sku}@{sub_dc}",
+            path_type="substitute",
+            available_qty=sub_available,
+            eta_days=0,  # same DC, no transfer needed
+            cost_per_unit=0.0,  # same cost basis as original
+            feasible=feasible,
+        ))
+
     ctx.recovery_paths = paths
     ctx.workflows_executed.append(workflow)
     return paths
