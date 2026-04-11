@@ -27,6 +27,12 @@ import json
 from typing import Any
 
 import art
+from openai.types.chat.chat_completion import Choice
+from openai.types.chat.chat_completion_message import ChatCompletionMessage
+from openai.types.chat.chat_completion_message_tool_call import (
+    ChatCompletionMessageToolCall,
+    Function,
+)
 
 from src.rollouts.trace_types import (
     Episode,
@@ -68,15 +74,20 @@ def episode_to_art_trajectory(
     Returns:
         An art.Trajectory with messages, tools, reward, and metadata.
     """
-    messages: list[dict[str, Any]] = []
+    messages: list[Any] = []  # Message dicts or Choice objects
     tools = _build_art_tools()
 
     # System prompt from the first event or a default
     messages.append({"role": "system", "content": _extract_system_content(episode)})
     messages.append({"role": "user", "content": episode.task_prompt})
 
-    # Walk events and build the conversation
-    pending_tool_calls: list[dict[str, Any]] = []
+    # Walk events and build the conversation.
+    # Assistant outputs use openai Choice objects (the trainable signal);
+    # context messages (system, user, tool results) stay as plain dicts.
+    # This matches art.Trajectory's Message|Choice union and eliminates
+    # PydanticSerializationUnexpectedValue warnings from union walking.
+    pending_tool_calls: list[ChatCompletionMessageToolCall] = []
+    pending_call_ids: list[str] = []
     tool_call_counter = 0
 
     for event in episode.events:
@@ -85,42 +96,54 @@ def episode_to_art_trajectory(
             if isinstance(payload, ToolCallPayload):
                 tool_call_counter += 1
                 call_id = f"call_{tool_call_counter}"
-                pending_tool_calls.append({
-                    "id": call_id,
-                    "type": "function",
-                    "function": {
-                        "name": payload.tool_name,
-                        "arguments": json.dumps(payload.arguments),
-                    },
-                })
+                pending_tool_calls.append(
+                    ChatCompletionMessageToolCall(
+                        id=call_id,
+                        type="function",
+                        function=Function(
+                            name=payload.tool_name,
+                            arguments=json.dumps(payload.arguments),
+                        ),
+                    )
+                )
+                pending_call_ids.append(call_id)
 
         elif event.event_type == EventType.TOOL_RESULT:
             payload = event.payload
             if isinstance(payload, ToolResultPayload) and pending_tool_calls:
-                # Emit the assistant message with tool_calls
-                messages.append({
-                    "role": "assistant",
-                    "content": None,
-                    "tool_calls": list(pending_tool_calls),
-                })
+                # Emit the assistant Choice with tool_calls
+                messages.append(Choice(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=ChatCompletionMessage(
+                        role="assistant",
+                        content=None,
+                        tool_calls=list(pending_tool_calls),
+                    ),
+                ))
                 # Emit tool result messages for each pending call
-                for tc in pending_tool_calls:
+                for cid in pending_call_ids:
                     messages.append({
                         "role": "tool",
-                        "tool_call_id": tc["id"],
+                        "tool_call_id": cid,
                         "content": json.dumps(payload.result),
                     })
                 pending_tool_calls = []
+                pending_call_ids = []
 
         elif event.event_type == EventType.TOOL_VALIDATION_ERROR:
             # Emit validation errors as system feedback so the learner
             # sees the full canonical parse -> validate -> error path.
             payload = event.payload
             if isinstance(payload, ValidationErrorPayload):
-                messages.append({
-                    "role": "assistant",
-                    "content": payload.raw_model_output or "(malformed output)",
-                })
+                messages.append(Choice(
+                    finish_reason="stop",
+                    index=0,
+                    message=ChatCompletionMessage(
+                        role="assistant",
+                        content=payload.raw_model_output or "(malformed output)",
+                    ),
+                ))
                 messages.append({
                     "role": "tool",
                     "tool_call_id": f"error_{event.step_index}",
@@ -148,10 +171,14 @@ def episode_to_art_trajectory(
             # Emit rejects as explicit system feedback.
             payload = event.payload
             if isinstance(payload, RejectPayload):
-                messages.append({
-                    "role": "assistant",
-                    "content": payload.raw_model_output or "(rejected output)",
-                })
+                messages.append(Choice(
+                    finish_reason="stop",
+                    index=0,
+                    message=ChatCompletionMessage(
+                        role="assistant",
+                        content=payload.raw_model_output or "(rejected output)",
+                    ),
+                ))
                 messages.append({
                     "role": "tool",
                     "tool_call_id": f"reject_{event.step_index}",
@@ -166,10 +193,14 @@ def episode_to_art_trajectory(
             payload = event.payload
             if isinstance(payload, TerminalOutcomePayload):
                 if payload.final_answer is not None:
-                    messages.append({
-                        "role": "assistant",
-                        "content": json.dumps(payload.final_answer),
-                    })
+                    messages.append(Choice(
+                        finish_reason="stop",
+                        index=0,
+                        message=ChatCompletionMessage(
+                            role="assistant",
+                            content=json.dumps(payload.final_answer),
+                        ),
+                    ))
 
     effective_reward = reward if reward is not None else episode.metrics.total_reward
 
@@ -454,10 +485,13 @@ def save_art_trajectories_jsonl(
     """Write art.Trajectory objects to a JSONL file.
 
     Each line is the Pydantic model_dump_json() of one trajectory.
+    Uses warnings='none' to suppress the remaining union-walking
+    warnings from context messages (system, user, tool) in the
+    Message|Choice discriminated union.
     """
     with open(path, "w") as f:
         for t in trajectories:
-            f.write(t.model_dump_json() + "\n")
+            f.write(t.model_dump_json(warnings="none") + "\n")
 
 
 def save_art_group_jsonl(
@@ -470,4 +504,4 @@ def save_art_group_jsonl(
     trajectories), suitable for art's batch ingestion.
     """
     with open(path, "w") as f:
-        f.write(group.model_dump_json() + "\n")
+        f.write(group.model_dump_json(warnings="none") + "\n")

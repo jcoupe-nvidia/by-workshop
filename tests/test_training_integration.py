@@ -139,10 +139,11 @@ class TestArtTrajectoryIncludesFailureEvents:
         trajectory = episode_to_art_trajectory(episode)
 
         messages = trajectory.messages_and_choices
+        # Filter to tool-role dicts (skip Choice objects which are assistant msgs)
         message_contents = [
             json.loads(m["content"]) if m["content"] else {}
             for m in messages
-            if m.get("role") == "tool" and m.get("content")
+            if isinstance(m, dict) and m.get("role") == "tool" and m.get("content")
         ]
 
         # Should contain at least one error message and one repair message
@@ -160,9 +161,11 @@ class TestArtTrajectoryIncludesFailureEvents:
         trajectory = episode_to_art_trajectory(episode)
         messages = trajectory.messages_and_choices
 
+        # Filter to tool-role dicts (skip Choice objects which are assistant msgs)
         error_msgs = [
             m for m in messages
-            if m.get("role") == "tool"
+            if isinstance(m, dict)
+            and m.get("role") == "tool"
             and m.get("content")
             and "error" in (json.loads(m["content"]) if m["content"] else {})
         ]
