@@ -9,7 +9,7 @@ This repository contains an MVP notebook for a workshop on agentic supply-chain 
 - structured tool calling for Nemotron-style models
 - fallback parsing for malformed or partially structured outputs
 - sequence-sensitive evaluation
-- clear ownership boundaries across NAT runtime, NeMo Gym rollout collection, repo-owned evaluation, and `openpipe-art` training
+- clear ownership boundaries across `runtime/`, `envs/`, `rollouts/`, `training/`, and `eval/`
 
 This is a pedagogical artifact, not a production system. The goal is to show concrete patterns, tradeoffs, and evaluation methods in a form that is easy to present live.
 
@@ -57,19 +57,18 @@ The agent should evaluate options such as:
 - Favor clarity over completeness.
 - Keep the logic explicit and easy to follow.
 - Separate scenario data, skills, tools, prompting, parsing, execution, fallback handling, and evaluation.
+- Keep the environment explicit: state, validity, transitions, preconditions, and reward-relevant facts should live in repo code.
 - Keep scenario-specific contracts repo-owned even when execution surfaces map to NAT, NeMo Gym, and `openpipe-art`.
+- Keep malformed calls, repairs, and rejects explicit in canonical traces rather than silently hiding them.
 - Avoid hidden magic, deep abstraction layers, unnecessary async, excessive visualization, large synthetic datasets, and production-grade packaging.
 - Prefer short cells, typed Python where practical, explicit comments, and predictable helper functions.
+- Keep the notebook as a consumer and teaching surface, not the source of truth for architecture-critical logic.
 
-## Ownership model
+## RL architecture
 
-Use these ownership guardrails consistently:
+Keep the RL-facing code split across `runtime/`, `envs/`, `rollouts/`, `training/`, and `eval/`.
 
-- the repo owns scenario contracts such as deterministic business tools, trace schemas, task semantics, and evaluation logic
-- **NeMo Agent Toolkit (NAT)** owns the interactive runtime surface: tool registration, structured tool calls, skill discovery, and single-episode execution
-- **NeMo Gym** owns training-time environment verification and rollout execution over repo-defined contracts
-- **`openpipe-art`** owns trainer-facing dataset views, reward views, curriculum, and training handoff
-- `eval/` stays repo-owned and should consume NAT traces, NeMo Gym environment facts, and `openpipe-art` artifacts rather than re-implementing them
+Use `documents/RL_ARCHITECTURE.md` as the source of truth for layer responsibilities and best practices. Keep scenario contracts repo-owned.
 
 ## Notebook requirements
 
@@ -126,7 +125,7 @@ Representative dependencies include:
 
 ## Skills and tools
 
-Use **NeMo Agent Toolkit (NAT)** as the runtime-facing tool and skill architecture for interactive and demo execution. Keep the notebook's skill layer compact, explicit, and inspectable.
+Use **NeMo Agent Toolkit (NAT)** as the runtime-facing tool and skill architecture for interactive and demo execution. Keep the notebook's skill layer compact, explicit, and inspectable. See `documents/RL_ARCHITECTURE.md` for the broader layer split.
 
 The runtime skill architecture should expose these canonical interfaces:
 
@@ -187,15 +186,11 @@ The notebook must define a canonical Nemotron-style tool-call format.
 
 These are the active requirements for the notebook design:
 
-- **NeMo Agent Toolkit (NAT)**
-  - as the runtime-oriented reference for tool registration, structured tool calls, inspectable agent execution, and demo-time visualization surfaces
-- **NeMo Gym**
-  - as the training-time reference for environment verification, rollout collection, and scalable multi-turn episode execution over repo-defined contracts
-- **`openpipe-art`**
-  - as the primary training-oriented reference for trajectory export, reward shaping discussion, and downstream post-training alignment
+- **NeMo Agent Toolkit (NAT)** for runtime-facing tool and skill execution
+- **NeMo Gym** for training-time environments and rollout collection
+- **`openpipe-art`** for trainer-facing datasets, rewards, and handoff
 
-
-Integration should stay narrow, local, and demonstrative. Prefer NAT for demo/runtime behavior, NeMo Gym for training-time rollout collection, and one concrete `openpipe-art` export or handoff example rather than building a full training or platform stack inside the notebook.
+Integration should stay narrow, local, and demonstrative. See `documents/RL_ARCHITECTURE.md` for the responsibility split around this stack.
 
 ## Target deployment environment
 
