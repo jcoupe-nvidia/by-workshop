@@ -173,6 +173,14 @@ def episode_to_art_trajectory(
 
     effective_reward = reward if reward is not None else episode.metrics.total_reward
 
+    # Collect per-step reward annotations from events for GRPO-compatible
+    # dense reward export.  Serialized as JSON string because
+    # art.Trajectory metadata/metrics only accept scalar values.
+    event_rewards = [
+        e.reward for e in episode.events
+        if e.reward is not None
+    ]
+
     return art.Trajectory(
         messages_and_choices=messages,
         tools=tools,
@@ -188,6 +196,7 @@ def episode_to_art_trajectory(
         metadata={
             "task_id": episode.task_id,
             "model_id": episode.model_id,
+            "per_step_rewards": json.dumps(event_rewards),
         },
     )
 
@@ -298,6 +307,102 @@ def enriched_episodes_to_art_group(
         reward = rewards[i] if rewards is not None else None
         trajectories.append(episode_to_art_trajectory(episode, reward=reward))
     return art.TrajectoryGroup(trajectories=trajectories)
+
+
+# ---------------------------------------------------------------------------
+# GRPO-ready grouped trajectory export
+# ---------------------------------------------------------------------------
+
+def build_grpo_trajectory_group(
+    records: list[TrainingRecord],
+    stage_config: StageConfig,
+    group_size: int = 4,
+) -> art.TrajectoryGroup:
+    """Build a GRPO-ready TrajectoryGroup with group-relative advantages.
+
+    Groups trajectories for the same task_id, computes each trajectory's
+    stage-shaped reward, and annotates every trajectory with group-relative
+    advantage (reward - group_mean) so that openpipe-art can use GRPO
+    without recomputing baselines.
+
+    Args:
+        records: TrainingRecords (may span multiple task_ids).
+        stage_config: Curriculum stage config for reward shaping.
+        group_size: Expected group size (for metadata; grouping uses
+                    all available trajectories per task).
+
+    Returns:
+        An art.TrajectoryGroup with per-trajectory group_advantage metadata
+        and per-step rewards in trajectory metrics.
+    """
+    from collections import defaultdict
+
+    # Group records by task_id
+    by_task: dict[str, list[TrainingRecord]] = defaultdict(list)
+    for record in records:
+        by_task[record.episode.task_id].append(record)
+
+    trajectories: list[art.Trajectory] = []
+
+    for task_id, task_records in by_task.items():
+        # Build reward views for each record in the group
+        group_rewards: list[float] = []
+        group_trajectories: list[tuple[TrainingRecord, float, list[float]]] = []
+
+        for record in task_records:
+            reward_view = build_episode_reward_view(
+                record.reward_summary, stage_config,
+            )
+            shaped_reward = reward_view.combined_reward
+            per_step = get_per_step_rewards(reward_view)
+            group_rewards.append(shaped_reward)
+            group_trajectories.append((record, shaped_reward, per_step))
+
+        # Compute group-relative advantage
+        group_mean = sum(group_rewards) / len(group_rewards) if group_rewards else 0.0
+
+        for record, shaped_reward, per_step in group_trajectories:
+            advantage = round(shaped_reward - group_mean, 4)
+
+            traj = episode_to_art_trajectory(
+                episode=record.episode,
+                reward=shaped_reward,
+            )
+            traj.metadata["stage"] = stage_config.stage.value
+            traj.metadata["group_task_id"] = task_id
+            traj.metadata["group_size"] = len(task_records)
+            traj.metadata["group_mean_reward"] = round(group_mean, 4)
+            traj.metadata["group_advantage"] = advantage
+            traj.metadata["per_step_rewards"] = json.dumps(per_step)
+
+            trajectories.append(traj)
+
+    return art.TrajectoryGroup(
+        trajectories=trajectories,
+        metadata={
+            "stage": stage_config.stage.value,
+            "method": "grpo",
+            "group_size": group_size,
+        },
+        metrics={
+            "num_trajectories": len(trajectories),
+            "num_tasks": len(by_task),
+            "avg_reward": (
+                sum(t.reward for t in trajectories) / len(trajectories)
+                if trajectories else 0.0
+            ),
+        },
+    )
+
+
+def get_per_step_rewards(view: EpisodeRewardView) -> list[float]:
+    """Extract per-step shaped rewards from an EpisodeRewardView.
+
+    Re-exported here for convenience; canonical definition is in
+    training.reward_views.
+    """
+    from src.training.reward_views import get_per_step_rewards as _get
+    return _get(view)
 
 
 # ---------------------------------------------------------------------------

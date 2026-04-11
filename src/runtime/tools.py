@@ -34,7 +34,7 @@ Call-order dependencies (machine-checkable):
     get_transfer_eta     -> requires find_alternate_inventory
     get_supplier_expedite_options -> requires get_order
     get_fulfillment_capacity     -> requires get_order
-    score_recovery_options       -> requires at least one mitigation path
+    score_recovery_options       -> requires find_alternate_inventory
     recommend_action             -> requires score_recovery_options
 """
 from __future__ import annotations
@@ -58,18 +58,10 @@ ToolFn = Callable[..., dict[str, Any]]
 # Central registry: tool_name -> (function, parameter_spec, description)
 TOOL_REGISTRY: dict[str, tuple[ToolFn, dict[str, str], str]] = {}
 
-# Sequence dependency graph: tool_name -> set of tools that must precede it
-TOOL_DEPENDENCIES: dict[str, set[str]] = {
-    "get_order": set(),
-    "get_shipment_status": {"get_order"},
-    "get_inventory": {"get_order"},
-    "find_alternate_inventory": {"get_inventory"},
-    "get_transfer_eta": {"find_alternate_inventory"},
-    "get_supplier_expedite_options": {"get_order"},
-    "get_fulfillment_capacity": {"get_order"},
-    "score_recovery_options": set(),  # requires at least one mitigation path (checked at runtime)
-    "recommend_action": {"score_recovery_options"},
-}
+# Re-export TOOL_DEPENDENCIES from envs.state where it is canonically defined.
+# The dependency graph is task truth owned by envs/; runtime re-exports for
+# convenience so existing call sites don't need to change their import path.
+from src.envs.state import TOOL_DEPENDENCIES  # noqa: E402
 
 
 def register_tool(

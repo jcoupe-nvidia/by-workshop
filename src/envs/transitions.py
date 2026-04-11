@@ -33,7 +33,8 @@ from src.envs.state import (
     TOOL_COMPLETES_SUBGOAL,
     TOOL_TO_SUBGOAL,
 )
-from src.runtime.tools import TOOL_DEPENDENCIES, TOOL_REGISTRY
+from src.envs.state import TOOL_DEPENDENCIES
+from src.runtime.tools import TOOL_REGISTRY
 
 
 # -- Transition result --------------------------------------------------------

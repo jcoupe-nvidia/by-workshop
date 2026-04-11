@@ -67,7 +67,8 @@ from src.envs.rewards import (
     OPTIMAL_STEP_COUNT,
     CORRECT_TOOLS_BY_SUBGOAL,
 )
-from src.runtime.tools import TOOL_REGISTRY, TOOL_DEPENDENCIES
+from src.envs.state import TOOL_DEPENDENCIES
+from src.runtime.tools import TOOL_REGISTRY
 
 
 class LateOrderRecoveryEnv:
