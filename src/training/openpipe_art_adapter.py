@@ -34,6 +34,9 @@ from src.rollouts.trace_types import (
     ToolCallPayload,
     ToolResultPayload,
     TerminalOutcomePayload,
+    ValidationErrorPayload,
+    RepairAttemptPayload,
+    RejectPayload,
 )
 from src.runtime.nat_tools import build_openai_tool_definitions
 from src.training.curriculum import StageConfig, TrainingStage
@@ -108,6 +111,56 @@ def episode_to_art_trajectory(
                         "content": json.dumps(payload.result),
                     })
                 pending_tool_calls = []
+
+        elif event.event_type == EventType.TOOL_VALIDATION_ERROR:
+            # Emit validation errors as system feedback so the learner
+            # sees the full canonical parse -> validate -> error path.
+            payload = event.payload
+            if isinstance(payload, ValidationErrorPayload):
+                messages.append({
+                    "role": "assistant",
+                    "content": payload.raw_model_output or "(malformed output)",
+                })
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": f"error_{event.step_index}",
+                    "content": json.dumps({
+                        "error": payload.error_type,
+                        "message": payload.message,
+                    }),
+                })
+
+        elif event.event_type == EventType.TOOL_REPAIR_ATTEMPT:
+            # Emit repair attempts so the learner can observe the
+            # fallback repair chain rather than a sanitized transcript.
+            payload = event.payload
+            if isinstance(payload, RepairAttemptPayload):
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": f"repair_{event.step_index}",
+                    "content": json.dumps({
+                        "repair_succeeded": payload.succeeded,
+                        "repairs_applied": payload.repairs_applied,
+                    }),
+                })
+
+        elif event.event_type == EventType.TOOL_REJECT:
+            # Emit rejects as explicit system feedback.
+            payload = event.payload
+            if isinstance(payload, RejectPayload):
+                messages.append({
+                    "role": "assistant",
+                    "content": payload.raw_model_output or "(rejected output)",
+                })
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": f"reject_{event.step_index}",
+                    "content": json.dumps({
+                        "rejected": True,
+                        "reason": payload.reason,
+                        "repairs_attempted": payload.repairs_attempted,
+                    }),
+                })
 
         elif event.event_type == EventType.TERMINAL_OUTCOME:
             payload = event.payload

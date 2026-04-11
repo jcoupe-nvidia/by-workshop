@@ -29,6 +29,7 @@ from src.rollouts.trace_types import (
     EpisodeMetrics,
     EventType,
     ToolCallPayload,
+    RepairAttemptPayload,
 )
 from src.envs.rewards import EpisodeRewardSummary
 from src.rollouts.episode_runner import EnrichedEpisodeResult
@@ -283,6 +284,10 @@ def _maybe_truncate(episode: Episode, max_tool_calls: int) -> Episode:
     """Return the episode unchanged if within bounds, or a shallow copy
     with events truncated to max_tool_calls valid tool calls.
 
+    Recomputes total_reward from the retained events so that truncated
+    episodes do not carry full-episode reward (which would distort
+    short-horizon RL training signals).
+
     This does not deep-copy — it reuses the same Event objects.
     """
     tool_call_count = episode.metrics.valid_tool_calls
@@ -299,24 +304,52 @@ def _maybe_truncate(episode: Episode, max_tool_calls: int) -> Episode:
                 cutoff_index = i
                 break
 
-    # Shallow copy with truncated events
+    truncated_events = episode.events[:cutoff_index]
+
+    # Recompute total_reward from only the retained events so short-horizon
+    # RL data pairs partial trajectories with partial rewards.
+    truncated_reward = sum(
+        e.reward for e in truncated_events if e.reward is not None
+    )
+
+    # Recount failure metrics from the retained event window
+    truncated_invalid = sum(
+        1 for e in truncated_events
+        if e.event_type == EventType.TOOL_VALIDATION_ERROR
+    )
+    truncated_repairs = sum(
+        1 for e in truncated_events
+        if e.event_type == EventType.TOOL_REPAIR_ATTEMPT
+    )
+    truncated_repair_successes = sum(
+        1 for e in truncated_events
+        if (e.event_type == EventType.TOOL_REPAIR_ATTEMPT
+            and isinstance(e.payload, RepairAttemptPayload)
+            and e.payload.succeeded)
+    )
+    truncated_rejects = sum(
+        1 for e in truncated_events
+        if e.event_type == EventType.TOOL_REJECT
+    )
+
+    # Shallow copy with truncated events and recomputed metrics
     truncated = Episode(
         task_id=episode.task_id,
         task_prompt=episode.task_prompt,
         model_id=episode.model_id,
         env_state_init=episode.env_state_init,
-        events=episode.events[:cutoff_index],
+        events=truncated_events,
         terminal=None,  # truncated episodes lose their terminal
         metrics=EpisodeMetrics(
             total_steps=cutoff_index,
             valid_tool_calls=max_tool_calls,
-            invalid_tool_calls=episode.metrics.invalid_tool_calls,
-            repair_attempts=episode.metrics.repair_attempts,
-            repair_successes=episode.metrics.repair_successes,
-            rejects=episode.metrics.rejects,
+            invalid_tool_calls=truncated_invalid,
+            repair_attempts=truncated_repairs,
+            repair_successes=truncated_repair_successes,
+            rejects=truncated_rejects,
             model_calls=episode.metrics.model_calls,
             wall_time_seconds=episode.metrics.wall_time_seconds,
-            total_reward=episode.metrics.total_reward,
+            total_reward=round(truncated_reward, 4),
         ),
         metadata={**episode.metadata, "truncated_at": max_tool_calls},
     )

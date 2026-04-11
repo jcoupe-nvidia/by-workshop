@@ -33,7 +33,7 @@ from src.rollouts.trace_types import (
     RepairAttemptPayload,
 )
 from src.runtime.tools import TOOL_DEPENDENCIES
-from src.runtime.workflows import WORKFLOW_TOOL_PATTERNS, WORKFLOW_ORDER
+from src.envs.state import SUBGOAL_ORDER, TOOL_TO_SUBGOAL, Subgoal
 from src.envs.rewards import EXPECTED_ARGUMENTS, OPTIMAL_TOOL_SEQUENCE
 
 
@@ -85,43 +85,40 @@ class TrajectoryEvaluation:
 # -- Individual evaluators -------------------------------------------------
 
 def eval_skill_selection(episode: Episode) -> DimensionScore:
-    """Did the agent call tools that map to the correct skill sequence?
+    """Did the agent call tools that map to the correct subgoal sequence?
 
-    Maps each valid tool call to its parent workflow/skill and checks whether
-    the implied skill order matches the canonical WORKFLOW_ORDER.
+    Uses the environment-owned SUBGOAL_ORDER and TOOL_TO_SUBGOAL mappings
+    (from envs.state) as the single source of truth for task progression,
+    rather than maintaining a separate ordering in the eval layer.
     """
     tool_names = episode.tool_names_called
     if not tool_names:
         return DimensionScore("skill_selection", 0.0, 1.0, "No valid tool calls.")
 
-    # Build a reverse map: tool -> workflow
-    tool_to_workflow: dict[str, str] = {}
-    for workflow, tools in WORKFLOW_TOOL_PATTERNS.items():
-        for t in tools:
-            tool_to_workflow[t] = workflow
-
-    # Extract the implied workflow sequence (deduplicated, in order of first appearance)
-    seen: set[str] = set()
-    implied_workflows: list[str] = []
+    # Map each tool call to its subgoal using the env-owned mapping
+    seen: set[Subgoal] = set()
+    implied_subgoals: list[Subgoal] = []
     for t in tool_names:
-        wf = tool_to_workflow.get(t)
-        if wf and wf not in seen:
-            seen.add(wf)
-            implied_workflows.append(wf)
+        sg = TOOL_TO_SUBGOAL.get(t)
+        if sg and sg not in seen:
+            seen.add(sg)
+            implied_subgoals.append(sg)
 
-    # Score: fraction of canonical workflow order covered in the right order
-    expected = WORKFLOW_ORDER
+    # Score: fraction of canonical subgoal order covered in the right order
+    expected = SUBGOAL_ORDER
     matched = 0
     exp_idx = 0
-    for wf in implied_workflows:
-        if exp_idx < len(expected) and wf == expected[exp_idx]:
+    for sg in implied_subgoals:
+        if exp_idx < len(expected) and sg == expected[exp_idx]:
             matched += 1
             exp_idx += 1
 
     score = matched / len(expected) if expected else 0.0
+    implied_names = [sg.value for sg in implied_subgoals]
+    expected_names = [sg.value for sg in expected]
     details = (
-        f"Implied skills: {implied_workflows}. "
-        f"Expected: {expected}. "
+        f"Implied subgoals: {implied_names}. "
+        f"Expected: {expected_names}. "
         f"Matched {matched}/{len(expected)} in order."
     )
     return DimensionScore("skill_selection", round(score, 3), 1.0, details)
@@ -540,14 +537,22 @@ def evaluate_nemo_gym_result(
 
     NeMo Gym result rows (NemoGymResultRow) contain pre-computed reward
     components from the environment. This function maps those components
-    to the eval dimensions without re-running the full evaluators.
+    to a *subset* of the canonical eval dimensions without re-running the
+    full evaluators.
+
+    Because ``skill_selection`` and ``recovery_quality`` are not available
+    from the result row, the weights are renormalized over the available
+    dimensions so that ``partial_overall`` is on the same 0-1 scale as
+    ``evaluate_trajectory().overall`` for the covered dimensions. The two
+    scores are still not directly comparable — use ``evaluate_trajectory``
+    for full regression tracking.
 
     Args:
         result_row: A NemoGymResultRow (from envs.nemo_gym_adapter).
         threshold: Minimum overall score to pass.
 
     Returns:
-        Dict with dimension scores and an overall pass/fail.
+        Dict with dimension scores and a partial pass/fail.
     """
     from src.envs.nemo_gym_adapter import NemoGymResultRow
 
@@ -559,28 +564,44 @@ def evaluate_nemo_gym_result(
         result_row.valid_tool_calls / total_calls if total_calls > 0 else 0.0
     )
 
-    # Map NeMo Gym reward components to eval dimensions
+    # Map NeMo Gym reward components to the eval dimensions that are
+    # available from the result row.  skill_selection and recovery_quality
+    # are not computable here — they require the full event stream.
     scores = {
         "tool_validity": round(tool_validity, 3),
         "tool_accuracy": round(result_row.avg_correct_arguments, 3),
         "sequence_correctness": round(result_row.avg_dependency_satisfied, 3),
         "task_success": float(result_row.task_success),
         "efficiency": round(result_row.avg_efficiency, 3),
-        "terminal_quality": round(result_row.terminal_quality, 3),
     }
 
-    # Weighted overall (using a subset of the full eval weights)
-    overall = sum(
-        scores.get(dim, 0.0) * DIMENSION_WEIGHTS.get(dim, 0.0)
-        for dim in scores
+    # Renormalize canonical weights to the available dimensions so the
+    # partial overall is on a comparable 0-1 scale.
+    available_weight_sum = sum(
+        DIMENSION_WEIGHTS.get(dim, 0.0) for dim in scores
     )
-    overall = round(overall, 3)
+    if available_weight_sum > 0:
+        partial_overall = sum(
+            scores[dim] * DIMENSION_WEIGHTS.get(dim, 0.0)
+            for dim in scores
+        ) / available_weight_sum
+    else:
+        partial_overall = 0.0
+    partial_overall = round(partial_overall, 3)
 
     return {
         "order_id": result_row.order_id,
         "dimension_scores": scores,
+        "dimensions_missing": sorted(
+            set(EVAL_DIMENSIONS) - set(scores.keys())
+        ),
         "total_reward": result_row.total_reward,
         "avg_step_reward": result_row.avg_step_reward,
-        "overall": overall,
-        "passed": overall >= threshold,
+        "partial_overall": partial_overall,
+        "passed": partial_overall >= threshold,
+        "note": (
+            "Partial evaluation — missing dimensions: "
+            f"{sorted(set(EVAL_DIMENSIONS) - set(scores.keys()))}. "
+            "Use evaluate_trajectory() for full regression tracking."
+        ),
     }
