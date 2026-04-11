@@ -106,15 +106,6 @@ def _check_imports() -> None:
     # Scenario data
     import src.scenario_data
 
-    # Backward-compatible shims (still importable)
-    import src.schema
-    import src.tools
-    import src.skills
-    import src.fallbacks
-    import src.agent_loop
-    import src.evaluation
-    import src.training_export
-
 
 def _run_rollout(order_id: str, save_path: str | None = None) -> None:
     """Run one episode via the rollout layer with environment rewards."""
