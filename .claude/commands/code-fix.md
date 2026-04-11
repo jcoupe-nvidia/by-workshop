@@ -11,9 +11,8 @@ Prioritize fixes using the same review order:
 1. Best-practice large-scale RL architecture, with a strong focus on GRPO-readiness.
 2. Explainability of the code and clarity of responsibility boundaries across NVIDIA software:
    - NeMo Agent Toolkit
-   - NeMo RL
-   - NVIDIA ProRL
-   - NVIDIA Megatron / Megatron Bridge
+   - `openpipe-art`
+   - historical trainer-facing, rollout-shaping, and scale-out systems references where they still appear
 3. Strength and completeness of the observability layer.
 
 Before making changes:

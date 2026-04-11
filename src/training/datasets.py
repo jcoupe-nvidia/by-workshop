@@ -16,9 +16,9 @@ Does NOT own:
     - Reward computation (see envs.rewards)
     - Reward shaping (see training.reward_views)
     - Curriculum stage definitions (see training.curriculum)
-    - NeMo RL trajectory format (see training.nemo_rl_adapter)
+    - openpipe-art-ready record building (see training.openpipe_art_adapter)
     - Episode serialization (see rollouts.serializers)
-    - Distributed execution (see systems/)
+    - Historical systems execution details (see systems/)
 """
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ class TrainingRecord:
     """One episode formatted for training consumption.
 
     Contains the episode, its reward summary, and stage-specific metadata.
-    Downstream adapters (NeMo RL, SFT) consume this to produce their
+    Downstream adapters (openpipe-art, SFT) consume this to produce their
     format-specific records.
     """
     episode: Episode

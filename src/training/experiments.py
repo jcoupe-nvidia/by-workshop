@@ -15,9 +15,9 @@ Does NOT own:
     - Curriculum stage definitions (see training.curriculum)
     - Dataset construction or filtering (see training.datasets)
     - Reward computation or shaping (see envs.rewards, training.reward_views)
-    - NeMo RL trajectory format (see training.nemo_rl_adapter)
-    - Megatron parallelism or launch configs (see systems/)
-    - Checkpoint management (see systems/)
+    - openpipe-art-ready record building (see training.openpipe_art_adapter)
+    - Historical systems launch or config details (see systems/)
+    - Checkpoint management, if reintroduced later, in a separate systems layer
 """
 from __future__ import annotations
 
@@ -111,7 +111,7 @@ class ExperimentPlan:
 
 # -- Default experiment plan ---------------------------------------------------
 
-# Hyperparameters aligned with NeMo RL conventions for each stage
+# Hyperparameters aligned with the current workshop training flow for each stage
 _SFT_HYPERPARAMS: dict[str, Any] = {
     "method": "sft",
     "learning_rate": 5e-5,
@@ -266,7 +266,7 @@ def build_default_experiment_plan(
             "4-stage curriculum for training a tool-calling agent on the "
             "late-order recovery scenario (SO-10482). Progresses from SFT "
             "through short-horizon RL, full multi-turn RL, and robustness "
-            "training. Designed for NeMo RL on 8x H100 target environment."
+            "training. Designed for the current openpipe-art-oriented workshop flow."
         ),
     )
 

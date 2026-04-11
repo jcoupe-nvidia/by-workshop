@@ -12,7 +12,7 @@ Does NOT own:
     - Episode or Event type definitions (see rollouts.trace_types)
     - Reward computation (see envs.rewards)
     - Training-specific dataset views (see training/)
-    - ProRL trajectory format (see rollouts.prorl_adapter)
+    - Training trajectory export formats (see rollouts.export_adapters)
 
 Serialization contract:
     - Every event is serialized with its full payload, event_type, step_index,

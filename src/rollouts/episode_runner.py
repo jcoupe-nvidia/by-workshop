@@ -12,14 +12,14 @@ Does NOT own:
     - Tool implementations or prompt policy (see runtime/)
     - Environment state transitions or reward formulas (see envs/)
     - Serialization formats (see rollouts.serializers)
-    - Training dataset views or Megatron configuration (see training/, systems/)
+    - Training dataset views or historical systems configuration (see training/, systems/)
     - Offline evaluation metrics (see eval/)
 
 The episode runner is the integration point between runtime and environment.
 The runtime produces a raw Episode (events without rewards), and this module
 replays those events through the environment to compute dense rewards and
 attach them back to the Episode. This keeps the runtime independent of the
-environment while giving downstream consumers (serializers, ProRL adapter,
+environment while giving downstream consumers (serializers, export adapters,
 training) fully enriched episodes.
 
 Usage::

@@ -9,7 +9,7 @@ This repository contains an MVP notebook for a workshop on agentic supply-chain 
 - structured tool calling for Nemotron-style models
 - fallback parsing for malformed or partially structured outputs
 - sequence-sensitive evaluation
-- training-oriented patterns aligned with NeMo RL / Megatron agent workflows
+- training-oriented patterns aligned with `openpipe-art`, with historical references to earlier trainer-facing, rollout-shaping, and scale-out systems framing where that context helps explain the evolution of the design
 
 This is a pedagogical artifact, not a production system. The goal is to show concrete patterns, tradeoffs, and evaluation methods in a form that is easy to present live.
 
@@ -42,10 +42,10 @@ The agent should evaluate options such as:
 - small synthetic datasets that are easy to inspect in notebook cells
 - deterministic tools and reproducible evaluation
 - at least one malformed-output or recovery example
+- one GRPO training run
 
 ### Out of scope
 
-- full training pipelines
 - production orchestration frameworks
 - general-purpose agent platforms
 - highly realistic ERP simulations
@@ -96,7 +96,8 @@ The notebook should include these sections:
    - what should be supervised at the skill and trajectory level
    - how trajectories could be scored
    - how sequence-sensitive rewards could be defined
-   - how this maps to NeMo RL / Megatron workflows
+   - how this maps to `openpipe-art`
+   - what earlier trainer-facing, rollout-shaping, and scale-out systems assumptions existed and why they were narrowed or removed
 
 ## MVP behavior constraints
 
@@ -161,30 +162,20 @@ The notebook must define a canonical Nemotron-style tool-call format.
 }
 ```
 
-## Required NVIDIA stack
+## Required stack
 
-These are hard requirements for the notebook design:
+These are the active requirements for the notebook design:
 
-- **NeMo RL**
-  - as the main training-oriented reference for exporting trajectories, rewards, and evaluator outputs
-- **NVIDIA Megatron**
-  - as the model-training and scaling context that the training-oriented discussion should align to alongside NeMo RL
-- **NVIDIA ProRL**
-  - for framing reward design around tool validity, sequence correctness, recovery quality, and task success
-- **OpenCode**
-  - as the architectural inspiration for the agent loop, tool registry, execution tracing, and worked examples
-  - implement a small local version so the execution flow remains visible for workshop understanding
+- **NeMo Agent Toolkit (NAT)**
+  - as the runtime-oriented reference for tool registration, structured tool calls, and inspectable agent execution
+- **`openpipe-art`**
+  - as the primary training-oriented reference for trajectory export, reward shaping discussion, evaluator outputs, and downstream post-training alignment
 
-Integration should stay narrow, local, and demonstrative. Prefer one concrete export or handoff example rather than building a full training or platform stack inside the notebook.
+
+Integration should stay narrow, local, and demonstrative. Prefer one concrete `openpipe-art` export or handoff example rather than building a full training or platform stack inside the notebook.
 
 ## Target deployment environment
 
-The target deployment environment is **8 H100 GPUs**.
+The notebook may still mention the earlier **8 H100** target environment as historical scaling context, but it should not depend on scale-out-systems-specific deployment assumptions or expand into deployment engineering or inference optimization at this stage.
 
-The notebook may reference this target environment for alignment, sizing context, and downstream planning, but it should not expand into deployment engineering or inference optimization at this stage.
 
-## Optional follow-up
-
-- **NeMo Guardrails**
-  - optional to-do after the required libraries are in place
-  - most relevant if fallback parsing later expands into policy checks, unsafe tool-call rejection, argument validation, or recovery rules

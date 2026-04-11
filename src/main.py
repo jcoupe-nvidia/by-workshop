@@ -93,7 +93,7 @@ def _check_imports() -> None:
     import src.rollouts.trace_types
     import src.rollouts.episode_runner
     import src.rollouts.serializers
-    import src.rollouts.prorl_adapter
+    import src.rollouts.export_adapters
 
     # Other packages
     import src.training
@@ -116,18 +116,18 @@ def _run_rollout(order_id: str, save_path: str | None = None) -> None:
     """Run one episode via the rollout layer with environment rewards."""
     from src.rollouts.episode_runner import run_enriched_episode
     from src.rollouts.serializers import save_episodes_jsonl
-    from src.rollouts.prorl_adapter import episode_to_nemo_trajectory
+    from src.rollouts.export_adapters import episode_to_training_trajectory
 
     result = run_enriched_episode(order_id)
     print()
     result.print_summary()
 
-    # Show NeMo RL trajectory conversion
-    trajectory = episode_to_nemo_trajectory(
+    # Show training trajectory conversion
+    trajectory = episode_to_training_trajectory(
         result.episode,
         reward_summary=result.reward_summary,
     )
-    print(f"\nNeMo RL trajectory: {trajectory.episode_length} steps, "
+    print(f"\nTraining trajectory: {trajectory.episode_length} steps, "
           f"total reward {trajectory.total_reward:+.4f}")
 
     if save_path:

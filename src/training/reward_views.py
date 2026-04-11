@@ -13,9 +13,9 @@ Owns:
 Does NOT own:
     - Reward computation from environment transitions (see envs.rewards)
     - Curriculum stage definitions (see training.curriculum)
-    - NeMo RL trajectory format (see rollouts.prorl_adapter)
+    - Training trajectory format (see rollouts.export_adapters)
     - Dataset construction or episode filtering (see training.datasets)
-    - Distributed execution (see systems/)
+    - Historical systems execution details (see systems/)
 """
 from __future__ import annotations
 
@@ -249,7 +249,7 @@ def get_per_step_rewards(view: EpisodeRewardView) -> list[float]:
     """Extract the shaped per-step reward list from an EpisodeRewardView.
 
     Returns one float per step (plus terminal if present), suitable for
-    direct use as the reward signal in NeMo RL trajectory records.
+    direct use as the reward signal in training trajectory records.
     """
     rewards = [sv.shaped_reward for sv in view.step_views]
     if view.terminal_view is not None:

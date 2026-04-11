@@ -1,24 +1,24 @@
 """
-NeMo RL-facing training semantics package.
+openpipe-art-facing training semantics package.
 
 Owns:
     - Trainer-facing datasets, reward views, and staged training progression
-    - NeMo RL-specific consumption and batch preparation
+    - openpipe-art-specific consumption and batch preparation
     - Experiment configuration and curriculum staging
     - SFT and RL record formatting
 
 Does NOT own:
     - Episode type definitions or serialization (see rollouts/)
     - Reward computation from environment transitions (see envs.rewards)
-    - Megatron parallelism, checkpointing, or launch configs (see systems/)
+    - Historical systems configuration details (see systems/)
     - Offline evaluation metrics (see eval/)
 
 Modules:
     - curriculum:       4-stage training curriculum (SFT -> short RL -> full RL -> robustness)
     - reward_views:     Stage-aware reward shaping over environment reward signals
-    - datasets:         Episode filtering and training dataset assembly per stage
-    - nemo_rl_adapter:  NeMo RL trainer-ready record building and serialization
-    - experiments:      Experiment configs tying stages to training runs
+    - datasets:              Episode filtering and training dataset assembly per stage
+    - openpipe_art_adapter:  openpipe-art-ready record building and serialization
+    - experiments:           Experiment configs tying stages to training runs
 """
 from src.training.curriculum import (
     TrainingStage,
@@ -39,10 +39,10 @@ from src.training.datasets import (
     build_all_stage_datasets,
     extract_sft_dataset,
 )
-from src.training.nemo_rl_adapter import (
-    NeMoRLTrainingRecord,
-    build_nemo_training_record,
-    build_nemo_training_batch,
+from src.training.openpipe_art_adapter import (
+    OpenPipeArtTrainingRecord,
+    build_openpipe_art_training_record,
+    build_openpipe_art_training_batch,
     save_training_records_jsonl,
 )
 from src.training.experiments import (
@@ -69,10 +69,10 @@ __all__ = [
     "build_training_dataset",
     "build_all_stage_datasets",
     "extract_sft_dataset",
-    # nemo_rl_adapter
-    "NeMoRLTrainingRecord",
-    "build_nemo_training_record",
-    "build_nemo_training_batch",
+    # openpipe_art_adapter
+    "OpenPipeArtTrainingRecord",
+    "build_openpipe_art_training_record",
+    "build_openpipe_art_training_batch",
     "save_training_records_jsonl",
     # experiments
     "ExperimentConfig",

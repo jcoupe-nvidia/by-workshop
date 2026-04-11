@@ -13,6 +13,4 @@ dependencies:
       - uv
       - nvidia-nat
       - nemo-gym
-      - megatron-bridge
-      - git+https://github.com/NVIDIA-NeMo/RL.git
-      - git+https://github.com/NVIDIA-NeMo/ProRL-Agent-Server.git
+      - openpipe-art

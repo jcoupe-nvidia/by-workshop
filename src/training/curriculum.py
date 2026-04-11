@@ -29,8 +29,8 @@ Owns:
 Does NOT own:
     - Reward computation (see envs.rewards, training.reward_views)
     - Dataset construction (see training.datasets)
-    - NeMo RL adapter specifics (see training.nemo_rl_adapter)
-    - Distributed execution (see systems/)
+    - openpipe-art adapter specifics (see training.openpipe_art_adapter)
+    - Historical systems execution details (see systems/)
 """
 from __future__ import annotations
 

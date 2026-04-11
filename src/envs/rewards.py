@@ -5,7 +5,7 @@ Owns:
     - Step-level reward computation from environment transition facts
     - Penalty definitions for invalid, redundant, and malformed actions
     - Episode-level reward aggregation
-    - Reward signal decomposition for ProRL-style training
+    - Reward signal decomposition for training-oriented inspection and shaping
 
 Does NOT own:
     - Environment state or transitions (see envs.state, envs.transitions)
@@ -101,7 +101,7 @@ class RewardSignal:
 
     Each component is a float in [-1.5, 1.0] range. The total reward
     is the weighted sum using REWARD_WEIGHTS. Components are exposed
-    individually so ProRL-style training can inspect and shape them.
+    individually so training adapters can inspect and shape them.
     """
     valid_call: float = 0.0
     correct_tool: float = 0.0

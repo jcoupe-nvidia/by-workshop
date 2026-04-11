@@ -11,23 +11,21 @@ The repository is being refactored from a custom notebook-led demo into a librar
 - Nemotron-style structured tool calling with validation and dependency checks
 - Repair/reject fallback handling for malformed tool outputs
 - Sequence-sensitive evaluation and training-oriented export
-- Ongoing migration to real `NeMo Agent Toolkit`, `NeMo RL`, `ProRL` rollout infrastructure, and `Megatron Bridge`
+- Ongoing migration to real `NeMo Agent Toolkit`, repo-owned canonical rollouts, and `openpipe-art`, with older trainer-facing, rollout-shaping, and scale-out systems references preserved only as historical context where useful
 
-## Required NVIDIA Stack
+## Active Environment Stack
 
-The intended working environment for this repo now explicitly includes the actual NVIDIA libraries, not only local code that imitates their roles:
+The intended working environment for this repo now explicitly includes the active libraries used by the current notebook and refactor path:
 
 - `nvidia-nat` for NeMo Agent Toolkit runtime orchestration
-- `nemo-gym` plus `prorl-agent-server` for rollout and agent-server infrastructure around ProRL-style collection
-- `nemo-rl` from source for trainer-facing RL and post-training flows
-- `megatron-bridge` for Megatron-backed training systems and checkpoint/interoperability surfaces
+- `nemo-gym` for environment-oriented rollouts and reward inspection
+- `openpipe-art` for training-oriented exports and post-training alignment
 
 The current `environment.yaml` installs:
 
-- package installs for `nvidia-nat`, `nemo-gym`, and `megatron-bridge`
-- source-repo installs for `nemo-rl` and `prorl-agent-server`
+- package installs for `nvidia-nat`, `nemo-gym`, and `openpipe-art`
 
-This is stricter than the earlier repo state, which only depended on `requests` and relied on local scaffolding.
+Earlier planning docs may still mention older trainer-facing, rollout-shaping, or scale-out systems framing because they originally explained the roles of training semantics, rollout infrastructure, and large-scale systems. Those references are now historical unless explicitly called out as active again.
 
 ## Core Scenario
 
@@ -47,9 +45,9 @@ The agent investigates whether the original source DC can still fulfill the orde
 - `src/scenario_data.py`: synthetic in-memory orders, shipments, inventory, transfer lanes, supplier options, capacity, and substitutes
 - `src/runtime/`: NAT-facing runtime package
 - `src/envs/`: explicit task environment state, transitions, validators, and rewards
-- `src/rollouts/`: canonical trace types plus rollout and ProRL-adapter work
-- `src/training/`: NeMo RL-facing training semantics
-- `src/systems/`: Megatron-Bridge-facing training systems
+- `src/rollouts/`: canonical trace types plus repo-owned rollout and serialization logic
+- `src/training/`: `openpipe-art`-facing training semantics
+- `src/systems/`: legacy or historical systems scaffolding, if still present
 - `src/eval/`: offline evaluation and reporting
 - `src/main.py`: entrypoint for local checks and episode execution
 - legacy top-level modules such as `src/tools.py` and `src/agent_loop.py` currently remain as compatibility shims during migration
@@ -85,22 +83,19 @@ After creating the environment, confirm the required stack is present:
 ```bash
 nat --version
 python - <<'PY'
-import nemo_rl
+from importlib.metadata import version
 import nemo_gym
-import prorl_agent_server
-from megatron.bridge import AutoBridge
 
-print("nemo_rl:", nemo_rl.__name__)
 print("nemo_gym:", nemo_gym.__name__)
-print("prorl_agent_server:", prorl_agent_server.__name__)
-print("megatron_bridge:", AutoBridge.__name__)
+print("openpipe-art version:", version("openpipe-art"))
 PY
 ```
 
 Notes:
 
 - `NeMo Agent Toolkit` publishes the `nat` CLI through the `nvidia-nat` package.
-- `NeMo RL` and `ProRL-Agent-Server` are currently installed from source repositories in `environment.yaml` because their upstream setup is source-first.
+- `openpipe-art` is now the primary training-oriented package in `environment.yaml`.
+- `nemo-gym` remains useful for explicit environment and reward-signal inspection even though the training-oriented path now centers `openpipe-art`.
 - Upstream NVIDIA docs generally prefer `uv`-managed virtual environments for these libraries; this repo keeps a `conda` environment only as a workshop convenience wrapper.
 
 ## Local Model
@@ -133,21 +128,21 @@ When you run the later notebook sections, the repo can produce:
 
 - worked successful and repair trajectories
 - seven-dimension trajectory evaluations
-- canonical episodes and trajectory artifacts intended for NeMo RL consumption
-- rollout artifacts intended for ProRL-style collection
-- Megatron-Bridge-facing systems scaffolding for an `8x H100` target environment
+- canonical episodes and trajectory artifacts intended for `openpipe-art`-oriented consumption
+- rollout artifacts intended for the repo's own canonical trace collection layer
+- historical notes about the earlier trainer-facing, rollout-shaping, and scale-out systems framing where they help explain the current architecture
 
 The notebook writes generated training artifacts under `artifacts/` when those export cells are executed.
 
 ## Migration Status
 
-The repo is still mid-migration from local stand-ins to real NVIDIA-library-backed paths.
+The repo is still mid-migration from local stand-ins and older stack assumptions to the current NAT + canonical rollouts + `openpipe-art` path.
 
-- `Phase 1` remains largely valid, but its canonical contracts still need to be revalidated against the real rollout, trainer, and systems integrations.
-- `Phase 2` must be reopened: the runtime package exists, but the executable runtime path still needs to be replaced with actual `NeMo Agent Toolkit` orchestration.
-- `Phase 3` must be revisited: the explicit environment exists, but it is not yet the authoritative environment flowing through the real `NAT -> ProRL -> NeMo RL` execution path.
-- `Phase 4` must also be reopened: the rollout package exists, but it still needs to be replaced or wrapped around actual `ProRL` rollout infrastructure.
-- `Phases 5-8` remain the remaining planned work, with `Phases 5-6` carrying the core `NeMo RL` and `Megatron Bridge` integrations.
+- `Phase 1` remains largely valid, but its canonical contracts still need to be revalidated against the real rollout and training/export integrations, plus any legacy systems notes that remain in the tree.
+- `Phase 2` remains valid structurally, but its public wording and adapters should stop implying a handoff to an earlier rollout or trainer stack.
+- `Phase 3` must be revisited so the environment and rewards are described as feeding canonical traces and `openpipe-art`, not an earlier `NAT -> rollout -> trainer` path.
+- `Phase 4` must be revisited so the rollout layer is treated as the active repo-owned trace layer rather than a temporary stand-in for an external rollout stack.
+- `Phase 5` must be revisited most heavily because the active training/export path should now be `openpipe-art`-first.
 
 ## Scope
 

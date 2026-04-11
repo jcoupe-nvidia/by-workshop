@@ -6,22 +6,23 @@
 - **Phase 3** is **complete**.
 - **Phase 4** is **complete**.
 - **Phase 5** is **complete**.
-- **Phase 6** is the next phase to implement.
+- **Phase 6** is the next phase to implement, but it has been re-scoped to remove or quarantine outdated scale-out-systems-first assumptions.
 - **Phases 7-8** are pending.
 
 ## Completed Phases To Reopen
-- **Phase 2** has been **revisited and completed**. NAT integration is now real: tools are registered as NAT Functions with Pydantic schemas (`nat_tools.py`), the LLM backend uses `NIMModelConfig` (`nat_llm.py`), Episodes convert to ATIF Trajectories (`atif_adapter.py`), and skills are directory-backed with `SKILL.md` files and canonical discovery APIs (`skills/api.py`). Workflow registries are derived from skill metadata.
-- **Phase 3** has been **revisited and completed**. The environment is now wired into the NAT/nemo-gym execution path: enriched episodes produce NeMo RL trajectories (via `prorl_adapter.py`), ATIF trajectories (via `atif_adapter.py`), and nemo-gym result rows with 17 numeric reward fields for reward profiling (via `envs/nemo_gym_adapter.py`). The full path env.step() → reward signals → enriched episode → all three output formats is verified end-to-end.
-- **Phase 4** must be reopened and partially redone because the rollout package exists, but it is still repo-local rollout infrastructure rather than actual ProRL-backed collection and serialization.
-- **Phase 1** does not need a full redo, but its canonical contracts should be revalidated once the real rollout, trainer, and systems libraries become the active code paths.
+- **Phase 1** should be revisited for terminology and downstream ownership. The canonical episode and event contracts are still the right foundation, but their documentation should stop implying active earlier-rollout or scale-out-systems consumers. Revalidate the contracts against generic canonical trace serialization and `openpipe-art` export needs.
+- **Phase 2** should be revisited for runtime-facing wording and public surfaces. The NAT integration work remains valid, but any docs or adapters that describe the runtime as handing off to an earlier rollout or trainer stack should be updated to describe NAT + canonical traces + `openpipe-art`.
+- **Phase 3** should be revisited for reward and export framing. The explicit environment work is still core, but reward signals and environment outputs should now be described as `openpipe-art`-facing or generic training inputs rather than earlier trainer/export or rollout artifacts.
+- **Phase 4** should be revisited to remove the assumption that repo-local rollout code will later be replaced by an external rollout stack. The rollout package should instead be treated as the active canonical trace collection and serialization layer unless the stack changes again.
+- **Phase 5** should be revisited most deeply. The training layer is still the right place for datasets, reward views, and experiments, but its current earlier-trainer-stack naming and adapter assumptions should be replaced with an `openpipe-art`-first path. Keep those older references only as historical context for why those boundaries were introduced.
 
 ## Goal
-Reshape the repository from a flat, notebook-led demo into a small library with clear ownership boundaries while preserving the current scenario, deterministic tools, and end-to-end workshop flow described in [CLAUDE.md](CLAUDE.md).
+Reshape the repository from a flat, notebook-led demo into a small library with clear ownership boundaries while preserving the current scenario, deterministic tools, and end-to-end workshop flow described in [CLAUDE.md](CLAUDE.md). The active target stack is NAT for runtime orchestration, repo-owned canonical rollouts and traces, and `openpipe-art` for training-oriented exports and post-training discussion.
 
 ## Current Pressure Points
 - [src/agent_loop.py](src/agent_loop.py) currently mixes model I/O, prompt policy, validation, fallback repair, trace capture, and trajectory shaping.
 - [src/evaluation.py](src/evaluation.py) and [src/training_export.py](src/training_export.py) both encode sequence and reward semantics, so training and offline evaluation are not clearly separated.
-- [src/training_export.py](src/training_export.py) is the main catch-all module: it mixes ProRL-style rewards, NeMo RL export, and Megatron config sketches.
+- [src/training_export.py](src/training_export.py) is the main catch-all module: it mixes historical rollout-style reward framing, earlier trainer-export assumptions, and scale-out-systems-oriented config sketches that no longer match the active environment.
 - [notebooks/late_order_recovery_workshop.ipynb](notebooks/late_order_recovery_workshop.ipynb) is already a consumer of `src/`, but it still contains scripted demo traces and loop-like teaching code that should not remain the architecture source of truth.
 
 ## Target Architecture
@@ -29,9 +30,8 @@ Reshape the repository from a flat, notebook-led demo into a small library with 
 flowchart LR
     notebook["Notebook_Demo"] --> runtime["runtime/ (NAT)"]
     runtime --> envs["envs/"]
-    runtime --> rollouts["rollouts/ (ProRL)"]
-    rollouts --> training["training/ (NeMo_RL)"]
-    training --> systems["systems/ (Megatron)"]
+    runtime --> rollouts["rollouts/ (canonical traces)"]
+    rollouts --> training["training/ (openpipe-art)"]
     rollouts --> evalLayer["eval/"]
     envs --> evalLayer
 ```
@@ -39,14 +39,13 @@ flowchart LR
 ## Ownership Guardrails
 - `runtime/` owns single-episode agent behavior, prompt policy, tool invocation, directory-backed skill discovery, metadata search, detailed skill loading, skill-command execution, and structured event emission. It must not schedule rollout jobs, construct RL datasets, choose distributed training topology, or own checkpoint conversion logic.
 - `envs/` owns task state, validity, transitions, terminal conditions, and reward-relevant facts. It defines what happened, but it must not decide rollout orchestration, trainer behavior, or distributed execution settings.
-- `rollouts/` owns episode running at scale, trace capture, failure and retry representation, and stable serialization. It must not redefine tool schemas, task environment logic, reward semantics, or Megatron execution settings.
-- `training/` owns trainer-facing datasets, reward views, experiments, and curriculum staging. It must not redefine runtime interfaces, rollout orchestration, or Megatron parallel configuration details.
-- `systems/` owns scalable training execution, checkpoint boundaries, launch profiles, and Megatron-facing configuration. It must not decide tool-calling policy, rollout semantics, reward functions, task logic, or offline benchmark definitions.
+- `rollouts/` owns episode running, trace capture, failure and retry representation, and stable serialization for evaluation and training handoff. It must not redefine tool schemas, task environment logic, or reward semantics.
+- `training/` owns `openpipe-art`-facing datasets, reward views, experiments, curriculum staging, and training-oriented exports. It must not redefine runtime interfaces or rollout orchestration.
 - `eval/` owns offline metrics, reports, and regression summaries. It should consume canonical traces and environment facts rather than re-implementing task transitions.
 
 ## Implementation Phases
 ### 1. Establish canonical contracts first (complete)
-- Create the new package skeleton under `src/`: [src/runtime](src/runtime), [src/envs](src/envs), [src/rollouts](src/rollouts), [src/training](src/training), [src/systems](src/systems), [src/eval](src/eval), plus [src/main.py](src/main.py). The target package set should explicitly include [src/training/curriculum.py](src/training/curriculum.py) in addition to the other training modules.
+- Create the new package skeleton under `src/`: [src/runtime](src/runtime), [src/envs](src/envs), [src/rollouts](src/rollouts), [src/training](src/training), [src/eval](src/eval), plus [src/main.py](src/main.py). If [src/systems](src/systems) remains in the tree, treat it as legacy or historical scaffolding rather than an active target package. The target package set should explicitly include [src/training/curriculum.py](src/training/curriculum.py) in addition to the other training modules.
 - Introduce one canonical structured episode and event model early so every later move targets the same contract. Put the shared trajectory types in [src/rollouts/trace_types.py](src/rollouts/trace_types.py) and make them the source of truth for task input, initial environment state metadata, ordered turns, model actions, tool call payloads, tool results, validation and fallback events, step-level reward annotations, terminal outcomes, and summary metrics.
 - Define the explicit canonical event vocabulary from the start: `user_task`, `model_thought` when intentionally preserved, `tool_call`, `tool_result`, `tool_validation_error`, `tool_repair_attempt`, `tool_reject`, `agent_message`, and `terminal_outcome`. Represent these as strongly typed dataclasses or Pydantic models so structured records replace unstructured trace text as the primary artifact.
 - Split [src/schema.py](src/schema.py) into runtime-facing action schemas in [src/runtime/schemas.py](src/runtime/schemas.py) and task-specific validity rules in [src/envs/validators.py](src/envs/validators.py).
@@ -78,22 +77,23 @@ flowchart LR
 - Include explicit penalties for malformed tool calls, invalid schema, dependency violations, repeated calls, looping behavior, hallucinated unsupported conclusions, overlong episodes, and silent fallback reliance. The decision process should be rewardable turn by turn.
 
 ### 4. Build the rollout layer around canonical traces (complete)
-- Create [src/rollouts/episode_runner.py](src/rollouts/episode_runner.py), [src/rollouts/serializers.py](src/rollouts/serializers.py), and [src/rollouts/prorl_adapter.py](src/rollouts/prorl_adapter.py).
+- Create [src/rollouts/episode_runner.py](src/rollouts/episode_runner.py), [src/rollouts/serializers.py](src/rollouts/serializers.py), and any training-export adapters needed for canonical trace handoff.
 - Move episode capture and serialization responsibilities out of [src/agent_loop.py](src/agent_loop.py) and [src/training_export.py](src/training_export.py).
-- Ensure rollout serialization preserves exact turn order, validation failures, repairs, rejects, and terminal outcomes so ProRL-style collection can scale later without changing the episode schema.
-- Keep rollout code independent from reward semantics and Megatron configuration.
+- Ensure rollout serialization preserves exact turn order, validation failures, repairs, rejects, and terminal outcomes so training and evaluation consumers can scale later without changing the episode schema.
+- Keep rollout code independent from reward semantics and historical scale-out-systems assumptions.
 
 ### 5. Build training semantics layer (complete)
 - Break up [src/training_export.py](src/training_export.py) rather than porting it whole.
 - Move trainer-facing data views into [src/training/datasets.py](src/training/datasets.py) and [src/training/reward_views.py](src/training/reward_views.py).
-- Put NeMo RL-specific consumption and adaptation into [src/training/nemo_rl_adapter.py](src/training/nemo_rl_adapter.py), stage definitions into [src/training/experiments.py](src/training/experiments.py), and curriculum staging into [src/training/curriculum.py](src/training/curriculum.py).
-- Treat NeMo RL as the owner of reward views, datasets, and staged training progression.
+- Replace the current earlier-trainer-stack adapter path with an `openpipe-art`-first adapter in [src/training](src/training), keeping any older trainer-specific files only as temporary compatibility shims or historical references until they are renamed or removed.
+- Put stage definitions into [src/training/experiments.py](src/training/experiments.py) and curriculum staging into [src/training/curriculum.py](src/training/curriculum.py).
+- Treat `openpipe-art` as the owner of reward views, datasets, and staged training progression.
 - Design the training layer to support staged progression: SFT on successful trajectories, short-horizon RL with dense rewards, full multi-turn RL with sequence-aware rewards, and a robustness curriculum with malformed calls and dead ends.
 
-### 6. Build scalable training systems layer (pending)
-- Create the Megatron-facing systems package: [src/systems/megatron_bridge.py](src/systems/megatron_bridge.py), [src/systems/parallelism.py](src/systems/parallelism.py), [src/systems/checkpointing.py](src/systems/checkpointing.py), [src/systems/launch_configs.py](src/systems/launch_configs.py), and [src/systems/model_recipes.py](src/systems/model_recipes.py).
-- Treat Megatron as the owner of distributed execution profiles, checkpoint boundaries, hardware-targeted launch recipes, and stable large-job configuration surfaces.
-- Include support for local development, single-node multi-GPU, and cluster or H100-scale profiles without moving reward or rollout semantics into the systems layer.
+### 6. Remove or quarantine outdated systems assumptions (pending)
+- Decide whether [src/systems](src/systems) should be deleted, archived, or retained as clearly historical scaffolding.
+- Remove scale-out-systems-first language from active docs, exports, and public interfaces.
+- Ensure no training path depends on scale-out-systems-specific launch, checkpoint, or parallelism configuration in the current environment.
 
 ### 7. Rebuild offline evaluation on top of the new contracts (pending)
 - Split [src/evaluation.py](src/evaluation.py) into [src/eval/metrics.py](src/eval/metrics.py), [src/eval/reports.py](src/eval/reports.py), and, if needed, [src/eval/regression.py](src/eval/regression.py).
@@ -105,9 +105,9 @@ flowchart LR
 - Update [notebooks/late_order_recovery_workshop.ipynb](notebooks/late_order_recovery_workshop.ipynb) to import the refactored library rather than defining any architecture-critical logic inline.
 - Add a minimal entrypoint in [src/main.py](src/main.py) for running one episode outside the notebook.
 - Move any large scripted trace builders or mini-loop demo helpers out of the notebook into importable code if they still need to exist.
-- Update [README.md](README.md) to describe the new package boundaries, the runtime, environment, rollout, training, and systems split, and the preserved workshop path.
+- Update [README.md](README.md) to describe the new package boundaries, the runtime, environment, rollout, training, and evaluation split, the status of any legacy `systems/` package, and the preserved workshop path.
 - Add migration notes documenting what moved where from [src/tools.py](src/tools.py), [src/skills.py](src/skills.py), [src/schema.py](src/schema.py), [src/agent_loop.py](src/agent_loop.py), [src/fallbacks.py](src/fallbacks.py), [src/evaluation.py](src/evaluation.py), and [src/training_export.py](src/training_export.py).
-- Deliver the documentation items needed for the refactor: updated [README.md](README.md), module docstrings describing responsibilities, migration notes, and a brief note clarifying NeMo RL versus Megatron ownership boundaries.
+- Deliver the documentation items needed for the refactor: updated [README.md](README.md), module docstrings describing responsibilities, migration notes, and a brief note clarifying active `openpipe-art` ownership versus historical trainer-facing, rollout-shaping, and scale-out systems references.
 
 ## Order Of Execution
 1. Introduce the new package tree and canonical trace and environment interfaces before moving behavior.
@@ -120,7 +120,7 @@ flowchart LR
 - Prefer small typed modules, focused functions, side-effect-light code, explicit public interfaces, and no hidden global state.
 - Use dataclasses or Pydantic models for structured records rather than informal dict-only contracts.
 - Do not hard-code notebook-only assumptions or bury config in ad hoc cells; keep launch surfaces config-driven.
-- Keep large-job system configuration separate from experiment and reward semantics.
+- Keep deployment or system configuration separate from experiment and reward semantics, and do not let historical scale-out systems assumptions leak back into active code paths.
 - Preserve the workshop scenario behavior, the current late-order-recovery flow, deterministic tool semantics, and the ability to run a local end-to-end demo.
 - Prefer directory-backed skills with concise `SKILL.md` files plus optional sidecars and scripts over growing a single catch-all workflow module.
 - Temporary notebook breakage during migration is acceptable; only the final state needs a working notebook consumer over the new library surfaces.
@@ -129,20 +129,20 @@ flowchart LR
 - Do not remove the notebook; demote it to a consumer.
 
 ## Deliverables
-- Required code deliverables: new package structure under `src/`, canonical trajectory and event types, explicit environment state transitions, a runtime skills package with `list_skills`, `search_skills`, `get_skill`, and `run_skill_command`, split runtime vs rollout vs training vs systems layers, updated imports and entrypoints, updated notebook wiring, and initial scalable training systems scaffolding for Megatron.
-- Required documentation deliverables: updated [README.md](README.md), module docstrings explaining responsibilities, migration notes summarizing what moved where, and a brief note clarifying NeMo RL versus Megatron responsibilities.
-- Optional but encouraged deliverables: a small CLI entrypoint for running one episode, a simple example of serialized trajectory output, a short architecture diagram in markdown, and one example large-job config profile.
+- Required code deliverables: new package structure under `src/`, canonical trajectory and event types, explicit environment state transitions, a runtime skills package with `list_skills`, `search_skills`, `get_skill`, and `run_skill_command`, split runtime vs rollout vs training vs evaluation layers, updated imports and entrypoints, updated notebook wiring, and an `openpipe-art`-first training export path.
+- Required documentation deliverables: updated [README.md](README.md), module docstrings explaining responsibilities, migration notes summarizing what moved where, and a brief note clarifying active `openpipe-art` responsibilities versus historical trainer-facing, rollout-shaping, and scale-out systems context.
+- Optional but encouraged deliverables: a small CLI entrypoint for running one episode, a simple example of serialized trajectory output, a short architecture diagram in markdown, and one example environment-specific or legacy-systems config profile if that scaffolding is retained.
 
 ## Acceptance Criteria
-- Clear ownership boundaries exist across runtime, environment, rollouts, evaluation, training semantics, and training systems.
+- Clear ownership boundaries exist across runtime, environment, rollouts, evaluation, and training semantics.
 - No catch-all replacement for [src/training_export.py](src/training_export.py) reappears; export, training, rollout, and systems concerns are split cleanly.
 - Structured typed event records are canonical across runtime, rollouts, training, and evaluation.
 - NAT-facing runtime behavior uses a directory-backed skills architecture with `list_skills`, `search_skills`, `get_skill`, and `run_skill_command` as the canonical discovery, read, and execution surfaces.
 - Environment transition rules and task semantics are explicit and are not hidden in notebook cells or evaluation helpers.
 - The notebook is demoted to a consumer of the library rather than a holder of core logic.
-- NeMo RL-facing training semantics and Megatron-facing training systems responsibilities are clearly separated.
+- `openpipe-art`-facing training semantics are clearly separated from runtime, rollouts, and evaluation.
 - Multi-turn RL readiness improves through support for successful and failed trajectory collection, dense reward shaping, rollout batching, and trainer ingestion.
-- Scalable training readiness improves through checkpoint boundaries, launch profiles, and Megatron-facing starter integrations.
+- No active path depends on earlier rollout-stack or scale-out-systems-specific integrations; any remaining references are clearly historical.
 - One local episode still runs end-to-end for `SO-10482`, preserving the existing workshop scenario.
 
 ## Main Risk To Watch

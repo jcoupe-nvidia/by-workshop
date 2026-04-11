@@ -15,9 +15,8 @@ Review priorities, in order from most important to least important:
 1. Best-practice large-scale RL architecture, with a strong focus on GRPO-readiness.
 2. Explainability of the code and clarity of responsibility boundaries across NVIDIA software:
    - NeMo Agent Toolkit
-   - NeMo RL
-   - NVIDIA ProRL
-   - NVIDIA Megatron / Megatron Bridge
+   - `openpipe-art`
+   - historical trainer-facing, rollout-shaping, and scale-out systems references where they still appear
 3. Strength and completeness of the observability layer.
 
 During the review:
@@ -36,7 +35,7 @@ During the review:
   - scalable rollout collection surfaces
   - explicit failure, repair, reject, and terminal events
   - trainer-facing data views that are independent from runtime code
-- check whether module names, APIs, and data flow make the roles of NAT, NeMo RL, ProRL, and Megatron easy to explain to a workshop or engineering audience
+- check whether module names, APIs, and data flow make the roles of NAT, the repo's rollout layer, and `openpipe-art` easy to explain to a workshop or engineering audience while keeping older trainer-facing, rollout-shaping, and scale-out systems references clearly historical
 - check whether observability is strong enough for debugging and training analysis, including:
   - structured event tracing
   - clear episode and turn boundaries

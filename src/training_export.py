@@ -1,15 +1,15 @@
 """
-Training-oriented export utilities for NeMo RL and ProRL reward design.
+Training-oriented export utilities for trajectory export and reward design.
 
 Converts agent traces and evaluation results into formats suitable for
 downstream training workflows:
 
-    - NeMo RL trajectory export:   JSONL records with per-step observations,
-                                   actions, and rewards for RL fine-tuning.
-    - ProRL reward computation:    Per-step and trajectory-level reward signals
+    - Training trajectory export:  JSONL records with per-step observations,
+                                   actions, and rewards for post-training flows.
+    - Reward computation:          Per-step and trajectory-level reward signals
                                    derived from the seven evaluation dimensions.
-    - Megatron training config:    A skeleton config dict for 8x H100 training
-                                   that references the exported data.
+    - Legacy systems config:       A historical config sketch that references
+                                   the exported data without driving active code paths.
 
 Integration is narrow and demonstrative -- the goal is to show *what* gets
 exported and *how* reward signals are shaped, not to build a full pipeline.
@@ -33,12 +33,12 @@ from src.tools import TOOL_DEPENDENCIES
 
 
 # ---------------------------------------------------------------------------
-# 1. NeMo RL trajectory export
+# 1. Training trajectory export
 # ---------------------------------------------------------------------------
 
 @dataclass
-class NeMoRLStep:
-    """One step in a NeMo RL-compatible trajectory record."""
+class TrainingTrajectoryStep:
+    """One step in a training-compatible trajectory record."""
     step_index: int
     observation: str       # what the agent saw before acting
     action: str            # the tool call or final answer (as JSON string)
@@ -48,23 +48,23 @@ class NeMoRLStep:
 
 
 @dataclass
-class NeMoRLTrajectory:
-    """Full trajectory formatted for NeMo RL ingestion."""
+class TrainingTrajectory:
+    """Full trajectory formatted for downstream training consumption."""
     task_id: str
     model_id: str
-    steps: list[NeMoRLStep]
+    steps: list[TrainingTrajectoryStep]
     total_reward: float
     episode_length: int
     metadata: dict[str, Any]
 
 
-def export_trajectory_for_nemo_rl(
+def export_training_trajectory(
     trace: AgentTrace,
     evaluation: TrajectoryEvaluation,
     step_rewards: list[float],
     model_id: str = "nvidia/nemotron-3-nano",
-) -> NeMoRLTrajectory:
-    """Convert an AgentTrace + evaluation into a NeMo RL trajectory record.
+) -> TrainingTrajectory:
+    """Convert an AgentTrace + evaluation into a training trajectory record.
 
     Args:
         trace: The agent trace from a completed run.
@@ -73,9 +73,9 @@ def export_trajectory_for_nemo_rl(
         model_id: The model identifier for provenance.
 
     Returns:
-        NeMoRLTrajectory ready for serialization.
+        TrainingTrajectory ready for serialization.
     """
-    nemo_steps: list[NeMoRLStep] = []
+    training_steps: list[TrainingTrajectoryStep] = []
 
     for i, step in enumerate(trace.steps):
         # Observation: the tool result from the previous step (or task prompt)
@@ -97,7 +97,7 @@ def export_trajectory_for_nemo_rl(
         reward = step_rewards[i] if i < len(step_rewards) else 0.0
         is_last = (i == len(trace.steps) - 1) and trace.completed
 
-        nemo_steps.append(NeMoRLStep(
+        training_steps.append(TrainingTrajectoryStep(
             step_index=i,
             observation=observation,
             action=action,
@@ -120,7 +120,7 @@ def export_trajectory_for_nemo_rl(
             (s.score for s in evaluation.scores if s.dimension == "task_success"),
             0.0,
         )
-        nemo_steps.append(NeMoRLStep(
+        training_steps.append(TrainingTrajectoryStep(
             step_index=len(trace.steps),
             observation=final_obs,
             action=final_action,
@@ -129,14 +129,14 @@ def export_trajectory_for_nemo_rl(
             info={"tool_name": "<final_answer>", "valid": True},
         ))
 
-    total_reward = sum(s.reward for s in nemo_steps)
+    total_reward = sum(s.reward for s in training_steps)
 
-    return NeMoRLTrajectory(
+    return TrainingTrajectory(
         task_id=trace.task,
         model_id=model_id,
-        steps=nemo_steps,
+        steps=training_steps,
         total_reward=round(total_reward, 4),
-        episode_length=len(nemo_steps),
+        episode_length=len(training_steps),
         metadata={
             "evaluation_overall": evaluation.overall,
             "evaluation_passed": evaluation.passed,
@@ -148,12 +148,8 @@ def export_trajectory_for_nemo_rl(
     )
 
 
-def trajectory_to_jsonl(trajectory: NeMoRLTrajectory) -> str:
-    """Serialize a NeMo RL trajectory to a single JSONL line.
-
-    The format follows NeMo RL conventions: one JSON object per trajectory,
-    with nested step arrays that include observation/action/reward triples.
-    """
+def trajectory_to_jsonl(trajectory: TrainingTrajectory) -> str:
+    """Serialize a training trajectory to a single JSONL line."""
     record = {
         "task_id": trajectory.task_id,
         "model_id": trajectory.model_id,
@@ -166,7 +162,7 @@ def trajectory_to_jsonl(trajectory: NeMoRLTrajectory) -> str:
 
 
 # ---------------------------------------------------------------------------
-# 2. ProRL-style reward computation
+# 2. Step and trajectory reward computation
 # ---------------------------------------------------------------------------
 
 # Per-step reward components and their weights.
@@ -184,7 +180,7 @@ def compute_step_rewards(
     trace: AgentTrace,
     expected_arguments: dict[str, dict[str, Any]] | None = None,
 ) -> list[float]:
-    """Compute per-step reward signals using ProRL-style decomposition.
+    """Compute per-step reward signals using the repo's reward decomposition.
 
     Each step receives a reward based on:
         - Tool validity:  +1.0 if valid, -0.5 if invalid
@@ -261,7 +257,7 @@ def compute_trajectory_reward(
 ) -> float:
     """Combine step-level and trajectory-level rewards into a single signal.
 
-    ProRL frames the total reward as a blend of:
+    The total reward is framed as a blend of:
         - Dense step-level rewards (encourage correct behavior at each step)
         - Sparse trajectory-level reward (overall task success)
 
@@ -294,7 +290,7 @@ def print_reward_breakdown(
     evaluation: TrajectoryEvaluation,
 ) -> None:
     """Pretty-print the per-step and trajectory reward breakdown."""
-    print("Per-step rewards (ProRL decomposition)")
+    print("Per-step rewards (training decomposition)")
     print("-" * 75)
     print(f"{'Step':>4}  {'Tool':<30}  {'Valid':>5}  {'Reward':>7}  Notes")
     print("-" * 75)
@@ -321,35 +317,35 @@ def print_reward_breakdown(
 
 
 # ---------------------------------------------------------------------------
-# 4. Megatron training config sketch
+# 4. Reference scale-out config sketch
 # ---------------------------------------------------------------------------
 
-def megatron_training_config_sketch(
+def reference_scaleout_config_sketch(
     num_trajectories: int = 100,
     model_name: str = "nvidia/nemotron-3-nano",
 ) -> dict[str, Any]:
-    """Generate a skeleton Megatron training config for 8x H100 RL fine-tuning.
+    """Generate a reference scale-out config sketch for illustration only.
 
     This is a conceptual reference, not a runnable config. It shows how the
-    exported trajectory data and reward signals would map into a Megatron +
-    NeMo RL training setup on the target deployment environment.
+    exported trajectory data and reward signals could be wired into a larger
+    training system without making that system an active dependency.
 
     Args:
         num_trajectories: Expected number of training trajectories.
         model_name: Base model for fine-tuning.
 
     Returns:
-        Dict representing the config skeleton.
+        Dict representing the config sketch.
     """
     return {
-        "# NOTE": "Conceptual config -- not directly runnable without NeMo RL installation",
+        "# NOTE": "Reference scale-out systems sketch -- not an active implementation path",
         "model": {
             "name": model_name,
             "type": "causal_lm",
             "precision": "bf16",
         },
         "training": {
-            "method": "ppo",  # Proximal Policy Optimization via NeMo RL
+            "method": "ppo",
             "num_episodes": num_trajectories,
             "max_steps_per_episode": 15,
             "batch_size": 4,
@@ -375,7 +371,7 @@ def megatron_training_config_sketch(
         },
         "data": {
             "format": "jsonl",
-            "trajectory_file": "trajectories/nemo_rl_export.jsonl",
+            "trajectory_file": "trajectories/training_export.jsonl",
             "fields": ["observation", "action", "reward", "done"],
         },
         "infrastructure": {
@@ -407,10 +403,10 @@ def megatron_training_config_sketch(
 # ---------------------------------------------------------------------------
 
 def save_trajectories_jsonl(
-    trajectories: list[NeMoRLTrajectory],
+    trajectories: list[TrainingTrajectory],
     path: str,
 ) -> None:
-    """Write a list of NeMo RL trajectories to a JSONL file.
+    """Write a list of training trajectories to a JSONL file.
 
     Args:
         trajectories: List of trajectories to export.
@@ -422,10 +418,10 @@ def save_trajectories_jsonl(
 
 
 def save_training_config(config: dict[str, Any], path: str) -> None:
-    """Write a Megatron training config sketch to a JSON file.
+    """Write a reference scale-out config sketch to a JSON file.
 
     Args:
-        config: Config dict from megatron_training_config_sketch.
+        config: Config dict from reference_scaleout_config_sketch.
         path: Output file path.
     """
     with open(path, "w") as f:

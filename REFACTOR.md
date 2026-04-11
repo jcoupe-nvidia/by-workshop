@@ -5,13 +5,13 @@
 Refactor this repository so it cleanly leverages:
 
 - **NeMo Agent Toolkit (NAT)** for agent runtime orchestration
-- **NVIDIA ProRL** for scalable multi-turn rollout generation
-- **NeMo RL** for policy optimization and post-training
-- **NVIDIA Megatron / Megatron Bridge** for large-scale training systems, distributed execution, checkpoint interoperability, and model packaging
+- **repo-owned canonical rollouts and trace serialization** for multi-turn episode collection
+- **`openpipe-art`** for policy optimization, post-training, and training-oriented export
+- historical references to earlier rollout, trainer-facing, and scale-out systems framing only where they explain earlier ownership boundaries or design intent
 
 The primary goal is to eliminate overlap in responsibilities across runtime, environment logic, rollout collection, evaluation, training semantics, and large-scale training systems, while following best practices for **multi-turn RL training for agent tool-calling agents**.
 
-This refactor should preserve the workshop/demo value of the repository, but reshape it into a cleaner architecture that can support **real scalable training jobs** later.
+This refactor should preserve the workshop/demo value of the repository, but reshape it into a cleaner architecture that can support **real training and export flows** later without depending on outdated stack assumptions.
 
 ---
 
@@ -43,30 +43,31 @@ NAT must **not** own:
 - checkpoint conversion pipelines
 - hardware execution strategy
 
-### 2. NVIDIA ProRL
+### 2. Canonical Rollout Layer
 
 Owns:
 
 - multi-turn rollout generation
 - episode lifecycle
-- concurrency-facing rollout orchestration
+- rollout orchestration
 - turn alignment and trace capture
 - failure/retry representation for data collection
 - rollout dataset production
 
-ProRL should answer:
+This layer should answer:
 
 **"How do we generate many high-quality multi-turn episodes?"**
 
-ProRL must **not** own:
+This layer must **not** own:
 
 - tool semantics
 - workflow/business logic
 - training algorithms
-- model parallel configuration
-- checkpoint packaging strategy
+- deployment or scaling configuration
 
-### 3. NeMo RL
+Historical note: earlier versions framed this responsibility as part of a separate rollout stack. In the current environment, the repository's own rollout layer is the active owner.
+
+### 3. `openpipe-art`
 
 Owns:
 
@@ -75,37 +76,35 @@ Owns:
 - algorithm selection
 - trainer-facing reward consumption
 - curriculum staging
-- checkpoint evaluation logic
+- checkpoint evaluation logic when needed by the training flow
 
-NeMo RL should answer:
+`openpipe-art` should answer:
 
 **"How do we improve the model from those episodes?"**
 
-NeMo RL must **not** own:
+`openpipe-art` must **not** own:
 
 - tool schemas
 - runtime prompt policy
 - rollout serving/concurrency logic
-- cluster launch topology
-- Megatron parallelism strategy
+- deployment topology
 
-### 4. NVIDIA Megatron / Megatron Bridge
+Historical note: earlier versions used a different trainer-facing stack as the primary training-oriented reference. That context may still be mentioned, but it is no longer the active requirement.
+
+### 4. Historical Large-Scale Systems Context
 
 Owns:
 
-- distributed training systems concerns
-- model construction/import/export where Megatron-specific
-- tensor/pipeline/context/expert parallel configuration
-- scalable launch recipes
-- checkpoint interoperability and conversion boundaries
-- performance-oriented training system configuration
-- hardware-targeted execution profiles
+- historical notes about distributed training systems concerns
+- historical notes about model construction/import/export where earlier scale-out systems assumptions shaped the design
+- historical notes about checkpoint interoperability and conversion boundaries
+- clearly quarantined legacy systems scaffolding if the repo keeps it around temporarily
 
-Megatron should answer:
+This context should answer:
 
-**"How do we execute training efficiently and correctly at scale?"**
+**"If large-scale systems work returns later, where should it live without contaminating the active design?"**
 
-Megatron must **not** own:
+It must **not** own:
 
 - tool-calling runtime behavior
 - episode definitions
@@ -113,6 +112,8 @@ Megatron must **not** own:
 - rollout logic
 - business-task environment transitions
 - offline evaluation policy
+
+Historical note: the earlier scale-out systems framing is no longer an active dependency in the current environment. Keep any mention clearly labeled as prior design context.
 
 ### 5. The Repository’s Own Environment Layer
 
@@ -141,10 +142,10 @@ Use the following split consistently:
 
 - **NAT**: single-episode runtime orchestration
 - **Environment layer**: task state, validity, transitions, task semantics
-- **ProRL**: scalable multi-turn rollout collection
-- **NeMo RL**: training semantics and post-training logic
-- **Megatron**: large-scale training systems and distributed execution
+- **Rollout layer**: canonical multi-turn rollout collection and serialization
+- **`openpipe-art`**: training semantics and post-training logic
 - **Eval layer**: offline benchmarking and reporting
+- **Historical systems context**: any quarantined legacy notes or scaffolding from the earlier scale-out-systems-oriented plan
 
 ### 2. No overlap in responsibility
 
@@ -154,20 +155,20 @@ Avoid these anti-patterns:
 - training code redefining tool schemas or runtime prompt policy
 - rollout code implementing task/business logic
 - evaluation code duplicating environment transition rules
-- Megatron-facing system code deciding rewards or rollout structure
+- legacy systems code deciding rewards or rollout structure
 - notebook cells acting as the system of record for architecture
 
-### 3. Treat training semantics and training systems as different things
+### 3. Treat training semantics and historical systems context as different things
 
 This repo should distinguish clearly between:
 
 - **training semantics**: what to optimize, what rewards to use, what datasets to build, what curriculum to run
-- **training systems**: how to execute the training efficiently on large hardware, how to configure parallelism, how to manage checkpoint boundaries
+- **historical systems context**: where large-scale execution, parallelism, and checkpoint-boundary concerns would live if that scope returns later
 
 Rule:
 
-- **NeMo RL owns training semantics**
-- **Megatron owns training systems**
+- **`openpipe-art` owns active training semantics**
+- **historical scale-out systems notes, if retained, stay quarantined from active implementation priorities**
 
 ### 4. Treat the environment as first-class
 
@@ -182,21 +183,21 @@ The multi-turn order recovery scenario should be represented as an explicit envi
 
 The current deterministic tool design is a strength for RL and should remain in place. Tool execution semantics should stay deterministic and machine-checkable.
 
-### 6. Design for future large jobs
+### 6. Design for future training extension
 
 This repo should be refactored so it is still lightweight enough for a workshop, but structurally capable of growing into:
 
 - distributed SFT jobs
 - distributed RL/post-training jobs
-- checkpoint conversion flows
-- cluster launch profiles
-- reproducible training recipes for large hardware
+- richer post-training flows
+- more formal export pipelines
+- optional future systems integration without re-entangling the architecture
 
 ---
 
 ## Target Architecture
 
-Refactor the repo into six major packages plus notebook/demo glue.
+Refactor the repo into five active packages plus notebook/demo glue. If a `systems/` package remains temporarily, treat it as legacy scaffolding rather than an active destination.
 
 ### A. `runtime/`
 Purpose: NAT-facing agent runtime package
@@ -251,7 +252,7 @@ Owns:
 This layer should define the task formally, independent of the runtime.
 
 ### C. `rollouts/`
-Purpose: ProRL-facing rollout collection package
+Purpose: canonical rollout collection package
 
 Owns:
 
@@ -265,7 +266,7 @@ Owns:
 This layer should collect many episodes and preserve exact turn structure.
 
 ### D. `training/`
-Purpose: NeMo RL-facing training semantics package
+Purpose: `openpipe-art`-facing training semantics package
 
 Owns:
 
@@ -278,20 +279,16 @@ Owns:
 
 This layer should define **what** gets optimized, not how distributed execution is performed.
 
-### E. `systems/`
-Purpose: Megatron-facing scalable training systems package
+### E. `systems/` (legacy or historical only)
+Purpose: quarantined historical systems scaffolding if retained temporarily
 
 Owns:
 
-- model system configuration
-- distributed execution profiles
-- parallelism settings
-- checkpoint conversion/interoperability
-- launch recipes
-- hardware-targeted configuration presets
-- performance-oriented training system utilities
+- historical launch/config sketches
+- historical checkpoint/interoperability notes
+- any temporary legacy system helpers that have not yet been removed
 
-This layer should define **how** training runs at scale.
+This layer should not define the active training path. If it exists at all, it should remain clearly non-authoritative.
 
 ### F. `eval/`
 Purpose: offline evaluation and reporting
@@ -343,24 +340,19 @@ Refactor toward this structure:
 │   │   └── validators.py
 │   ├── rollouts/
 │   │   ├── __init__.py
-│   │   ├── prorl_adapter.py
+│   │   ├── export_adapters.py
 │   │   ├── episode_runner.py
 │   │   ├── serializers.py
 │   │   └── trace_types.py
 │   ├── training/
 │   │   ├── __init__.py
-│   │   ├── nemo_rl_adapter.py
+│   │   ├── openpipe_art_adapter.py
 │   │   ├── datasets.py
 │   │   ├── curriculum.py
 │   │   ├── experiments.py
 │   │   └── reward_views.py
-│   ├── systems/
-│   │   ├── __init__.py
-│   │   ├── megatron_bridge.py
-│   │   ├── checkpointing.py
-│   │   ├── parallelism.py
-│   │   ├── launch_configs.py
-│   │   └── model_recipes.py
+│   ├── systems/              # optional legacy/historical scaffolding only
+│   │   └── ...
 │   ├── eval/
 │   │   ├── __init__.py
 │   │   ├── metrics.py
@@ -452,21 +444,18 @@ Requirements:
 Refactor to:
 - `src/rollouts/serializers.py`
 - `src/training/datasets.py`
-- `src/training/nemo_rl_adapter.py`
+- `src/training/openpipe_art_adapter.py`
 - `src/training/experiments.py`
-- `src/systems/megatron_bridge.py`
-- `src/systems/checkpointing.py`
-- `src/systems/launch_configs.py`
+- optional legacy `src/systems/` notes only if older scale-out-systems scaffolding still needs to be quarantined temporarily
 
 Requirements:
 
 - eliminate the "catch-all export file" pattern
 - define a canonical trajectory format first
 - build training dataset views from that canonical format
-- keep NeMo RL integration isolated from runtime code
-- keep ProRL rollout serialization isolated from trainer code
-- keep Megatron/checkpoint/launch concerns isolated from RL semantics
-- move any conceptual Megatron config sketch into the `systems/` package
+- keep `openpipe-art` integration isolated from runtime code
+- keep rollout serialization isolated from trainer code
+- keep any historical systems sketches isolated from active training semantics
 
 ---
 
@@ -636,9 +625,9 @@ It must not:
 
 ---
 
-## ProRL Rollout Requirements
+## Rollout Requirements
 
-The ProRL-facing layer should treat multi-turn rollouts as first-class.
+The rollout layer should treat multi-turn rollouts as first-class.
 
 ### Requirements
 
@@ -660,13 +649,13 @@ It must not:
 - redefine tool schemas
 - redefine the task environment
 - define reward semantics
-- define Megatron execution settings
+- define deployment or historical systems settings
 
 ---
 
-## NeMo RL Training Requirements
+## `openpipe-art` Training Requirements
 
-The NeMo RL-facing layer should consume structured trajectories, not notebook-generated ad hoc exports.
+The `openpipe-art`-facing layer should consume structured trajectories, not notebook-generated ad hoc exports.
 
 ### Requirements
 
@@ -696,61 +685,28 @@ The training layer decides:
 It must not decide:
 - rollout service orchestration
 - runtime tool interfaces
-- Megatron parallel configuration details
+- deployment-specific configuration details
 
 ---
 
-## Megatron / Scalable Training Systems Requirements
+## Historical Systems Context
 
-The Megatron-facing systems layer should make the repo a real scalable training starter.
+If the repo keeps a `systems/` package around temporarily, it should be treated as legacy or historical scaffolding rather than an active implementation target.
 
 ### Requirements
 
-- create a dedicated `systems/` package
-- isolate Megatron/Megatron Bridge integration from RL semantics
-- support checkpoint import/export boundaries
-- support scalable launch profiles
-- support future tensor/pipeline/context parallel settings
-- support hardware-targeted configs such as local dev vs multi-GPU workstation vs cluster jobs
-- define stable configuration surfaces for large-job execution
-
-### Suggested modules
-
-- `systems/megatron_bridge.py`
-  - Megatron-specific model/provider construction
-  - import/export boundaries
-  - checkpoint interoperability helpers
-
-- `systems/parallelism.py`
-  - tensor parallel
-  - pipeline parallel
-  - context parallel
-  - optional expert parallel surfaces later
-
-- `systems/launch_configs.py`
-  - local dev profile
-  - single-node multi-GPU profile
-  - cluster/H100-scale profile
-
-- `systems/checkpointing.py`
-  - save/load boundaries
-  - conversion helpers
-  - artifact naming and checkpoint organization
-
-- `systems/model_recipes.py`
-  - model-size presets
-  - execution-ready training system recipes
+- isolate any historical systems notes from active training semantics
+- avoid routing current training or export paths through earlier scale-out systems assumptions
+- either remove, archive, or clearly label any remaining systems scaffolding
 
 ### Important rule
 
-Megatron exists here as the **training systems layer**, not as the owner of RL logic.
+The earlier scale-out systems framing exists here only as historical context, not as an active dependency or implementation target.
 
 ### Ownership rule
 
 The systems layer may decide:
-- how a job runs at scale
-- how parallelism is configured
-- how checkpoints are packaged or converted
+- how quarantined historical notes are organized if they still exist
 
 It must not decide:
 - tool-calling policies
@@ -780,7 +736,7 @@ The notebook should remain useful, but should no longer contain core system logi
 - define reward logic inline
 - act as the only way to run the system
 - contain the only export path for training artifacts
-- contain the only large-job config path
+- contain the only legacy systems or large-job config path
 
 ---
 
@@ -794,7 +750,7 @@ Claude should execute the refactor in this order.
 2. introduce typed event/trajectory models
 3. introduce environment state and transition skeleton
 4. split runtime schemas from environment validation
-5. establish boundary between training semantics and training systems
+5. establish boundary between active training semantics and any historical systems context
 
 ### Phase 2: Move runtime logic
 
@@ -815,22 +771,20 @@ Claude should execute the refactor in this order.
 1. create `rollouts/trace_types.py`
 2. create `rollouts/serializers.py`
 3. create `rollouts/episode_runner.py`
-4. add `rollouts/prorl_adapter.py`
+4. add any training-export adapters needed for canonical trace handoff
 
 ### Phase 5: Build training semantics layer
 
 1. create `training/datasets.py`
 2. create `training/reward_views.py`
-3. create `training/nemo_rl_adapter.py`
+3. create `training/openpipe_art_adapter.py`
 4. create `training/experiments.py`
 
-### Phase 6: Build scalable training systems layer
+### Phase 6: Remove or quarantine outdated systems assumptions
 
-1. create `systems/megatron_bridge.py`
-2. create `systems/parallelism.py`
-3. create `systems/checkpointing.py`
-4. create `systems/launch_configs.py`
-5. create `systems/model_recipes.py`
+1. remove active scale-out-systems-first language from docs and interfaces
+2. decide whether `systems/` should be deleted, archived, or clearly marked legacy
+3. ensure no active training/export path depends on systems-layer assumptions
 
 ### Phase 7: Rebuild offline evaluation
 
@@ -863,8 +817,8 @@ Claude should follow these constraints during implementation.
 - do not hard-code notebook-only assumptions
 - do not bury config in ad hoc cells
 - make launch surfaces config-driven
-- keep large-job config separate from experiment semantics
-- support future distributed execution without changing core task interfaces
+- keep deployment and environment-specific config separate from experiment semantics
+- support future training extension without changing core task interfaces
 
 ### Backward compatibility
 
@@ -891,24 +845,24 @@ Claude should produce the following as part of the refactor.
 - new package structure under `src/`
 - canonical trajectory/event types
 - explicit environment state transitions
-- split runtime vs rollout vs training vs systems layers
+- split runtime vs rollout vs training vs evaluation layers
 - updated imports and entrypoints
 - updated notebook wiring
-- initial scalable training systems scaffolding for Megatron
+- `openpipe-art`-first training/export path
 
 ### Required documentation deliverables
 
 - updated `README.md` describing the new architecture
 - module docstrings explaining responsibilities
 - migration notes summarizing what moved where
-- brief note clarifying NeMo RL vs Megatron responsibilities
+- brief note clarifying active `openpipe-art` responsibilities versus historical trainer-facing, rollout-shaping, and scale-out systems context
 
 ### Optional but encouraged
 
 - a small CLI entrypoint for running one episode
 - a simple example of serialized trajectory output
 - a short architecture diagram in markdown
-- one example large-job config profile
+- one example environment-specific or legacy-systems config profile if that scaffolding is retained
 
 ---
 
@@ -917,7 +871,7 @@ Claude should produce the following as part of the refactor.
 The refactor is complete when all of the following are true:
 
 1. **Clear ownership boundaries**
-   - runtime, environment, rollouts, evaluation, training semantics, and training systems each have distinct responsibilities
+   - runtime, environment, rollouts, evaluation, and training semantics each have distinct responsibilities
 
 2. **No catch-all training export file**
    - training/export/system logic is split cleanly by concern
@@ -931,8 +885,8 @@ The refactor is complete when all of the following are true:
 5. **Notebook is demoted**
    - notebook consumes the library rather than defining core behavior
 
-6. **Training semantics and training systems are separate**
-   - NeMo RL-facing logic and Megatron-facing logic do not overlap
+6. **Training semantics remain separate from runtime and rollout logic**
+   - `openpipe-art`-facing logic does not overlap with runtime, rollout, or evaluation ownership
 
 7. **Multi-turn RL readiness improves**
    - the codebase is easier to use for:
@@ -940,15 +894,11 @@ The refactor is complete when all of the following are true:
      - failed trajectory collection
      - reward shaping
      - rollout batching
-     - NeMo RL ingestion
-     - ProRL integration
+     - `openpipe-art` ingestion
 
-8. **Scalable training readiness improves**
-   - the codebase has a real starter path for:
-     - larger distributed jobs
-     - checkpoint conversion boundaries
-     - launch profiles
-     - Megatron integration
+8. **Outdated stack assumptions are contained**
+   - no active implementation path depends on older rollout-stack or scale-out-systems assumptions
+   - any remaining references are clearly historical
 
 9. **Existing scenario still works**
    - the late-order recovery demo can still run end-to-end
@@ -965,7 +915,7 @@ Priorities:
 2. make the environment explicit
 3. make structured trajectories canonical
 4. prepare the codebase for multi-turn RL training of tool-calling agents
-5. prepare the codebase for real scalable training jobs
+5. prepare the codebase for real `openpipe-art`-oriented training/export flows
 6. preserve the current workshop scenario and demo value
 
 When choices are ambiguous, prefer the option that most clearly separates:
@@ -974,7 +924,6 @@ When choices are ambiguous, prefer the option that most clearly separates:
 - environment/task logic
 - rollout collection
 - training semantics
-- training systems
 - offline evaluation
 
 Do not keep architecture-critical logic trapped in the notebook.

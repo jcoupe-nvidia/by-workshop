@@ -1,1 +1,1 @@
-"""Megatron-facing scalable training systems package: parallelism, checkpointing, launch configs."""
+"""Legacy or historical systems package: parallelism, checkpointing, launch configs."""

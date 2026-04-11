@@ -624,7 +624,7 @@ def print_trace_summary(trace: AgentTrace) -> None:
 
 
 def trace_to_trajectory(trace: AgentTrace) -> list[dict[str, Any]]:
-    """Export a trace as a list of trajectory steps for NeMo RL export.
+    """Export a trace as a list of trajectory steps for training export.
 
     Each step includes the tool call, result, and metadata needed for
     trajectory-based training.
