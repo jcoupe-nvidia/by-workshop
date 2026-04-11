@@ -1,185 +1,315 @@
 """
 openpipe-art training adapter.
 
-Takes training trajectories from ``rollouts.export_adapters`` and prepares
-them for openpipe-art consumption: applies stage-specific reward views,
-builds training-ready records, and handles serialization for the
-openpipe-art ingestion contract.
+Converts enriched Episodes and training records into real ``art.Trajectory``
+and ``art.TrajectoryGroup`` objects for openpipe-art consumption. This is the
+canonical bridge between repo-owned episode traces and openpipe-art's training
+infrastructure.
 
 Owns:
-    - Applying training reward views to training trajectories
-    - Building training-ready records with stage-shaped rewards
-    - Batch preparation for openpipe-art training runs
-    - SFT-specific formatting for supervised fine-tuning stages
+    - Episode/TrainingRecord -> art.Trajectory conversion
+    - Batch -> art.TrajectoryGroup assembly
+    - Stage-aware reward shaping applied to art.Trajectory.reward
+    - SFT-specific message formatting for supervised fine-tuning stages
+    - OpenAI-style tool definition export for art.Trajectory.tools
 
 Does NOT own:
-    - Training trajectory type definitions or Episode conversion
-      (see rollouts.export_adapters)
+    - Episode types or enrichment (see rollouts/)
     - Reward computation from environment transitions (see envs.rewards)
     - Reward component weighting (see training.reward_views)
     - Curriculum stage definitions (see training.curriculum)
     - Dataset filtering (see training.datasets)
+    - art training loops or backends (openpipe-art owns those)
 """
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field, asdict
 from typing import Any
 
-from src.rollouts.export_adapters import (
-    TrainingTrajectory,
-    episode_to_training_trajectory,
+import art
+
+from src.rollouts.trace_types import (
+    Episode,
+    EventType,
+    ToolCallPayload,
+    ToolResultPayload,
+    TerminalOutcomePayload,
 )
+from src.runtime.nat_tools import build_openai_tool_definitions
 from src.training.curriculum import StageConfig, TrainingStage
 from src.training.reward_views import (
     EpisodeRewardView,
     build_episode_reward_view,
-    get_per_step_rewards,
 )
 from src.training.datasets import TrainingRecord
 
 
-@dataclass
-class OpenPipeArtTrainingRecord:
-    """A training trajectory with stage-specific reward shaping applied for openpipe-art."""
+# ---------------------------------------------------------------------------
+# Episode -> art.Trajectory conversion
+# ---------------------------------------------------------------------------
 
-    trajectory: TrainingTrajectory
-    stage: TrainingStage
-    reward_view: EpisodeRewardView | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)
+def episode_to_art_trajectory(
+    episode: Episode,
+    reward: float | None = None,
+) -> art.Trajectory:
+    """Convert a canonical Episode to an art.Trajectory.
 
-    def to_dict(self) -> dict[str, Any]:
-        record = {
-            "task_id": self.trajectory.task_id,
-            "model_id": self.trajectory.model_id,
-            "total_reward": self.trajectory.total_reward,
-            "episode_length": self.trajectory.episode_length,
-            "stage": self.stage.value,
-            "steps": [asdict(s) for s in self.trajectory.steps],
-            "metadata": {**self.trajectory.metadata, **self.metadata},
-        }
-        if self.reward_view is not None:
-            record["reward_view"] = self.reward_view.to_dict()
-        return record
+    Builds the OpenAI-style messages_and_choices list from the episode's
+    events, preserving tool calls and tool results in the format that
+    art.Trajectory expects for training.
 
+    Args:
+        episode: Canonical Episode from the rollout layer.
+        reward: Override reward. If None, uses episode.metrics.total_reward.
 
-def shape_trajectory_rewards(
-    trajectory: TrainingTrajectory,
-    reward_view: EpisodeRewardView,
-) -> TrainingTrajectory:
-    """Apply stage-shaped rewards to a training trajectory in place."""
+    Returns:
+        An art.Trajectory with messages, tools, reward, and metadata.
+    """
+    messages: list[dict[str, Any]] = []
+    tools = _build_art_tools()
 
-    shaped_rewards = get_per_step_rewards(reward_view)
+    # System prompt from the first event or a default
+    messages.append({"role": "system", "content": _extract_system_content(episode)})
+    messages.append({"role": "user", "content": episode.task_prompt})
 
-    for i, step in enumerate(trajectory.steps):
-        if i < len(shaped_rewards):
-            step.reward = shaped_rewards[i]
+    # Walk events and build the conversation
+    pending_tool_calls: list[dict[str, Any]] = []
+    tool_call_counter = 0
 
-    trajectory.total_reward = round(sum(s.reward for s in trajectory.steps), 4)
-    return trajectory
+    for event in episode.events:
+        if event.event_type == EventType.TOOL_CALL:
+            payload = event.payload
+            if isinstance(payload, ToolCallPayload):
+                tool_call_counter += 1
+                call_id = f"call_{tool_call_counter}"
+                pending_tool_calls.append({
+                    "id": call_id,
+                    "type": "function",
+                    "function": {
+                        "name": payload.tool_name,
+                        "arguments": json.dumps(payload.arguments),
+                    },
+                })
 
+        elif event.event_type == EventType.TOOL_RESULT:
+            payload = event.payload
+            if isinstance(payload, ToolResultPayload) and pending_tool_calls:
+                # Emit the assistant message with tool_calls
+                messages.append({
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": list(pending_tool_calls),
+                })
+                # Emit tool result messages for each pending call
+                for tc in pending_tool_calls:
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": json.dumps(payload.result),
+                    })
+                pending_tool_calls = []
 
-def build_openpipe_art_training_record(
-    training_record: TrainingRecord,
-    stage_config: StageConfig,
-) -> OpenPipeArtTrainingRecord:
-    """Convert a TrainingRecord into an openpipe-art training record."""
+        elif event.event_type == EventType.TERMINAL_OUTCOME:
+            payload = event.payload
+            if isinstance(payload, TerminalOutcomePayload):
+                if payload.final_answer is not None:
+                    messages.append({
+                        "role": "assistant",
+                        "content": json.dumps(payload.final_answer),
+                    })
 
-    episode = training_record.episode
-    reward_summary = training_record.reward_summary
+    effective_reward = reward if reward is not None else episode.metrics.total_reward
 
-    trajectory = episode_to_training_trajectory(episode, reward_summary)
-    reward_view = build_episode_reward_view(reward_summary, stage_config)
-    shape_trajectory_rewards(trajectory, reward_view)
-
-    return OpenPipeArtTrainingRecord(
-        trajectory=trajectory,
-        stage=stage_config.stage,
-        reward_view=reward_view,
+    return art.Trajectory(
+        messages_and_choices=messages,
+        tools=tools,
+        reward=effective_reward,
+        metrics={
+            "valid_tool_calls": episode.metrics.valid_tool_calls,
+            "invalid_tool_calls": episode.metrics.invalid_tool_calls,
+            "repair_attempts": episode.metrics.repair_attempts,
+            "rejects": episode.metrics.rejects,
+            "episode_length": episode.metrics.total_steps,
+            "task_success": 1 if episode.is_complete else 0,
+        },
         metadata={
-            "original_task_id": episode.task_id,
-            "stage_description": stage_config.description,
+            "task_id": episode.task_id,
+            "model_id": episode.model_id,
         },
     )
 
 
-def build_openpipe_art_training_batch(
-    training_records: list[TrainingRecord],
+def _extract_system_content(episode: Episode) -> str:
+    """Extract the system prompt from episode events, or return a default."""
+    for event in episode.events:
+        if event.event_type == EventType.USER_TASK:
+            # The system prompt is typically set before the user task;
+            # for now use a sensible default since the runtime builds it.
+            break
+    from src.runtime.prompts import build_system_prompt
+    return build_system_prompt()
+
+
+def _build_art_tools() -> list[dict[str, Any]]:
+    """Build OpenAI-style tool definitions for art.Trajectory.tools."""
+    return build_openai_tool_definitions()
+
+
+# ---------------------------------------------------------------------------
+# TrainingRecord -> shaped art.Trajectory
+# ---------------------------------------------------------------------------
+
+def training_record_to_art_trajectory(
+    record: TrainingRecord,
     stage_config: StageConfig,
-) -> list[OpenPipeArtTrainingRecord]:
-    """Convert a batch of TrainingRecords into openpipe-art training records."""
+) -> art.Trajectory:
+    """Convert a TrainingRecord into an art.Trajectory with stage-shaped reward.
 
-    return [
-        build_openpipe_art_training_record(record, stage_config)
-        for record in training_records
+    Applies stage-specific reward shaping from the reward view, then builds
+    an art.Trajectory with the shaped reward assigned.
+
+    Args:
+        record: TrainingRecord from the dataset layer.
+        stage_config: Curriculum stage config for reward shaping.
+
+    Returns:
+        An art.Trajectory with stage-shaped reward.
+    """
+    reward_view = build_episode_reward_view(record.reward_summary, stage_config)
+    shaped_reward = reward_view.combined_reward
+
+    trajectory = episode_to_art_trajectory(
+        episode=record.episode,
+        reward=shaped_reward,
+    )
+    trajectory.metadata["stage"] = stage_config.stage.value
+    trajectory.metadata["stage_description"] = stage_config.description
+
+    return trajectory
+
+
+# ---------------------------------------------------------------------------
+# Batch -> art.TrajectoryGroup
+# ---------------------------------------------------------------------------
+
+def training_batch_to_art_group(
+    records: list[TrainingRecord],
+    stage_config: StageConfig,
+) -> art.TrajectoryGroup:
+    """Convert a batch of TrainingRecords into an art.TrajectoryGroup.
+
+    Each record is converted to an art.Trajectory with stage-shaped
+    rewards. The group can be passed directly to art's training backends.
+
+    Args:
+        records: List of TrainingRecords from a stage dataset.
+        stage_config: Curriculum stage config for reward shaping.
+
+    Returns:
+        An art.TrajectoryGroup ready for training.
+    """
+    trajectories = [
+        training_record_to_art_trajectory(record, stage_config)
+        for record in records
     ]
-
-
-def training_record_to_jsonl(record: OpenPipeArtTrainingRecord) -> str:
-    """Serialize a training record to a single JSONL line."""
-
-    return json.dumps(record.to_dict())
-
-
-def save_training_records_jsonl(
-    records: list[OpenPipeArtTrainingRecord],
-    path: str,
-) -> None:
-    """Write training records to a JSONL file."""
-
-    with open(path, "w") as f:
-        for record in records:
-            f.write(training_record_to_jsonl(record) + "\n")
-
-
-@dataclass
-class SFTTrainingRecord:
-    """Supervised fine-tuning record for the SFT stage."""
-
-    prompt: str
-    completion: str
-    task_id: str
-    metadata: dict[str, Any] = field(default_factory=dict)
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "task_id": self.task_id,
-            "prompt": self.prompt,
-            "completion": self.completion,
-            "metadata": self.metadata,
-        }
-
-
-def build_sft_record(training_record: TrainingRecord) -> SFTTrainingRecord:
-    """Build an SFT training record from a TrainingRecord."""
-
-    from src.training.datasets import extract_sft_record
-
-    sft = extract_sft_record(training_record)
-    episode = training_record.episode
-
-    completion_parts: list[str] = []
-    for tc in sft.tool_call_sequence:
-        completion_parts.append(json.dumps(tc))
-    if sft.final_answer is not None:
-        completion_parts.append(json.dumps({"final_answer": sft.final_answer}))
-
-    completion = "\n".join(completion_parts)
-
-    return SFTTrainingRecord(
-        prompt=episode.task_prompt,
-        completion=completion,
-        task_id=episode.task_id,
-        metadata={"num_tool_calls": len(sft.tool_call_sequence)},
+    return art.TrajectoryGroup(
+        trajectories=trajectories,
+        metadata={"stage": stage_config.stage.value},
+        metrics={
+            "num_trajectories": len(trajectories),
+            "avg_reward": (
+                sum(t.reward for t in trajectories) / len(trajectories)
+                if trajectories else 0.0
+            ),
+        },
     )
 
 
-def save_sft_records_jsonl(
-    records: list[SFTTrainingRecord],
+def enriched_episodes_to_art_group(
+    episodes: list[Episode],
+    rewards: list[float] | None = None,
+) -> art.TrajectoryGroup:
+    """Convert a list of Episodes directly to an art.TrajectoryGroup.
+
+    Bypasses the TrainingRecord/stage layer for simple batch conversion.
+
+    Args:
+        episodes: List of canonical Episodes.
+        rewards: Optional per-episode reward overrides.
+
+    Returns:
+        An art.TrajectoryGroup.
+    """
+    trajectories = []
+    for i, episode in enumerate(episodes):
+        reward = rewards[i] if rewards is not None else None
+        trajectories.append(episode_to_art_trajectory(episode, reward=reward))
+    return art.TrajectoryGroup(trajectories=trajectories)
+
+
+# ---------------------------------------------------------------------------
+# SFT-specific formatting
+# ---------------------------------------------------------------------------
+
+def build_sft_art_trajectory(record: TrainingRecord) -> art.Trajectory:
+    """Build an art.Trajectory formatted for supervised fine-tuning.
+
+    SFT trajectories use the same message format but reward is not
+    used for loss computation. The trajectory captures the ideal
+    conversation for cross-entropy training.
+
+    Args:
+        record: A TrainingRecord from the SFT stage dataset.
+
+    Returns:
+        An art.Trajectory with SFT-appropriate messages.
+    """
+    trajectory = episode_to_art_trajectory(record.episode, reward=1.0)
+    trajectory.metadata["training_mode"] = "sft"
+    return trajectory
+
+
+def build_sft_art_group(records: list[TrainingRecord]) -> art.TrajectoryGroup:
+    """Build an art.TrajectoryGroup for SFT training.
+
+    Args:
+        records: TrainingRecords from the SFT stage.
+
+    Returns:
+        An art.TrajectoryGroup with SFT trajectories.
+    """
+    trajectories = [build_sft_art_trajectory(r) for r in records]
+    return art.TrajectoryGroup(
+        trajectories=trajectories,
+        metadata={"training_mode": "sft"},
+    )
+
+
+# ---------------------------------------------------------------------------
+# JSONL serialization (for offline handoff to art training pipelines)
+# ---------------------------------------------------------------------------
+
+def save_art_trajectories_jsonl(
+    trajectories: list[art.Trajectory],
     path: str,
 ) -> None:
-    """Write SFT training records to a JSONL file."""
+    """Write art.Trajectory objects to a JSONL file.
 
+    Each line is the Pydantic model_dump_json() of one trajectory.
+    """
     with open(path, "w") as f:
-        for record in records:
-            f.write(json.dumps(record.to_dict()) + "\n")
+        for t in trajectories:
+            f.write(t.model_dump_json() + "\n")
+
+
+def save_art_group_jsonl(
+    group: art.TrajectoryGroup,
+    path: str,
+) -> None:
+    """Write an art.TrajectoryGroup to a JSONL file.
+
+    Writes the full group as a single JSON line (group metadata + all
+    trajectories), suitable for art's batch ingestion.
+    """
+    with open(path, "w") as f:
+        f.write(group.model_dump_json() + "\n")

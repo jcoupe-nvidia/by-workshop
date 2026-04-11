@@ -87,6 +87,43 @@ def run_enriched_episode(
     return enrich_episode(raw_episode, order_id)
 
 
+def run_enriched_episode_nat(
+    order_id: str,
+    max_iterations: int = 15,
+    max_tokens: int = 1024,
+    temperature: float = 0.1,
+    verbose: bool = True,
+) -> EnrichedEpisodeResult:
+    """Run a full episode via NAT FunctionGroup dispatch and enrich with rewards.
+
+    Same as run_enriched_episode() but uses the NAT-backed execution path:
+        1. Calls run_agent_episode_nat() (NAT FunctionGroup + NIMModelConfig)
+        2. Replays events through LateOrderRecoveryEnv for reward computation
+        3. Attaches rewards to Event records
+
+    Args:
+        order_id: The order to investigate (e.g. "SO-10482").
+        max_iterations: Safety bound on loop iterations.
+        max_tokens: Max tokens per model response.
+        temperature: Sampling temperature.
+        verbose: Print each step as it happens.
+
+    Returns:
+        EnrichedEpisodeResult with the episode and reward summary.
+    """
+    from src.runtime.agent import run_agent_episode_nat
+
+    raw_episode = run_agent_episode_nat(
+        order_id=order_id,
+        max_iterations=max_iterations,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        verbose=verbose,
+    )
+
+    return enrich_episode(raw_episode, order_id)
+
+
 def enrich_episode(
     episode: Episode,
     order_id: str | None = None,

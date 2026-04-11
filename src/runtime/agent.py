@@ -4,6 +4,7 @@ Single-episode agent execution loop and model adapter.
 Owns:
     - Model adapter (HTTP calls to local Nemotron endpoint)
     - Single-episode agent loop (think -> parse -> validate -> execute -> observe)
+    - NAT-backed agent entrypoint (run_agent_episode_nat) using FunctionGroup dispatch
     - Structured event emission via EpisodeRecorder
     - Backward-compatible AgentTrace and helper types
 
@@ -16,9 +17,12 @@ Does NOT own:
     - Rollout batching or serialization (see rollouts/)
     - Reward computation (see envs.rewards)
 
-This module intentionally implements a small local version of the
-OpenCode-inspired architecture so the think -> emit tool call -> validate ->
-execute -> observe cycle stays visible and easy to understand in the workshop.
+The module provides two execution paths:
+    - run_agent_episode()     -- direct TOOL_REGISTRY dispatch + raw HTTP model calls
+    - run_agent_episode_nat() -- NAT FunctionGroup dispatch + NIMModelConfig model calls
+
+Both paths share the same parse -> validate -> fallback -> execute -> observe
+cycle and produce identical canonical Episode traces.
 
 Model adapter contract:
     - POST to http://0.0.0.0:8000/v1/chat/completions
@@ -621,6 +625,243 @@ def print_trace_summary(trace: AgentTrace) -> None:
         print(f"\nFinal answer:")
         for k, v in trace.final_answer.items():
             print(f"  {k}: {v}")
+
+
+def run_agent_episode_nat(
+    order_id: str,
+    max_iterations: int = MAX_ITERATIONS,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+    temperature: float = 0.1,
+    verbose: bool = True,
+) -> Episode:
+    """Execute the agent loop using NAT FunctionGroup dispatch and NIM config.
+
+    This is the NAT-aligned version of run_agent_episode(). Instead of
+    dispatching tools through the repo's TOOL_REGISTRY dict and calling
+    the model via raw HTTP, it:
+
+        1. Registers tools in a NAT FunctionGroup via build_nat_function_group()
+        2. Calls the model via call_model_nim() using NIMModelConfig
+        3. Dispatches tool execution through invoke_tool_via_group()
+
+    The parse -> validate -> fallback -> observe cycle is identical to
+    run_agent_episode(), and the output is the same canonical Episode.
+
+    Args:
+        order_id: The order to investigate (e.g. "SO-10482").
+        max_iterations: Safety bound on loop iterations.
+        max_tokens: Max tokens per model response.
+        temperature: Sampling temperature.
+        verbose: Print each step as it happens.
+
+    Returns:
+        Episode with canonical structured events.
+    """
+    import asyncio
+    from src.runtime.nat_tools import build_nat_function_group, invoke_tool_via_group
+    from src.runtime.nat_llm import build_nim_config, call_model_nim
+
+    # Build NAT surfaces
+    function_group = build_nat_function_group()
+    nim_config = build_nim_config(max_tokens=max_tokens, temperature=temperature)
+
+    task_prompt = build_task_message(order_id)
+    recorder = EpisodeRecorder(
+        task_id=order_id,
+        task_prompt=task_prompt,
+        model_id=nim_config.model_name,
+    )
+
+    system_msg = {"role": "system", "content": build_system_prompt()}
+    user_msg = {"role": "user", "content": task_prompt}
+    messages: list[dict[str, str]] = [system_msg, user_msg]
+
+    recorder.record_user_task(task_prompt)
+    tools_called: list[str] = []
+
+    if verbose:
+        print(f"=== NAT agent episode started for {order_id} ===")
+        print(f"    Max iterations: {max_iterations}")
+        print(f"    Model: {nim_config.model_name} via NIMModelConfig")
+        print()
+
+    for iteration in range(1, max_iterations + 1):
+        if verbose:
+            print(f"--- Iteration {iteration} ---")
+
+        # Step 1: Call model via NIM config
+        try:
+            raw_response = call_model_nim(
+                messages, config=nim_config,
+                max_tokens=max_tokens, temperature=temperature,
+            )
+            recorder.increment_model_calls()
+        except Exception as e:
+            error_msg = f"Model call failed: {e}"
+            recorder.record_terminal("error", error_message=error_msg)
+            if verbose:
+                print(f"  ERROR: {error_msg}")
+            break
+
+        if verbose:
+            display = raw_response[:200] + ("..." if len(raw_response) > 200 else "")
+            print(f"  Model: {display}")
+
+        # Step 2: Parse and validate (same as run_agent_episode)
+        result = validate_tool_call(raw_response, TOOL_REGISTRY)
+        fallback_result: FallbackResult | None = None
+
+        if isinstance(result, ValidationError):
+            fb = try_repair(raw_response, TOOL_REGISTRY)
+
+            if fb.action == FallbackAction.REPAIRED and fb.repaired:
+                recorder.record_repair_attempt(
+                    original_output=raw_response,
+                    repaired_output=fb.repaired,
+                    repairs_applied=fb.repairs_applied,
+                    succeeded=True,
+                )
+                result = validate_tool_call(fb.repaired, TOOL_REGISTRY)
+                fallback_result = fb
+                if verbose:
+                    print(f"  -> Fallback REPAIRED: {fb.repairs_applied}")
+            elif fb.action == FallbackAction.REJECTED:
+                recorder.record_repair_attempt(
+                    original_output=raw_response,
+                    repaired_output=None,
+                    repairs_applied=fb.repairs_applied,
+                    succeeded=False,
+                )
+                recorder.record_reject(
+                    reason=fb.rejection_reason or "Unknown rejection",
+                    raw_model_output=raw_response,
+                    repairs_attempted=fb.repairs_applied,
+                )
+                fallback_result = fb
+                if verbose:
+                    print(f"  -> Fallback REJECTED: {fb.rejection_reason}")
+
+        # Step 3a: Final answer
+        if isinstance(result, ParsedFinalAnswer):
+            if result.thought:
+                recorder.record_model_thought(result.thought)
+            recorder.record_terminal("final_answer", final_answer=result.answer)
+            messages.append({"role": "assistant", "content": raw_response})
+            if verbose:
+                print(f"  -> Final answer: {json.dumps(result.answer, indent=2)}")
+            break
+
+        # Step 3b: Validation error
+        if isinstance(result, ValidationError):
+            recorder.record_validation_error(
+                error_type=result.error_type,
+                message=result.message,
+                raw_model_output=raw_response,
+            )
+            messages.append({"role": "assistant", "content": raw_response})
+            messages.append({
+                "role": "user",
+                "content": (
+                    f"Error: {result.message} "
+                    f"Please respond with a valid JSON tool call or final answer."
+                ),
+            })
+            if verbose:
+                print(f"  -> Validation error: {result.error_type}: {result.message}")
+            continue
+
+        # Step 3c: Valid tool call -- check dependencies
+        assert isinstance(result, ParsedToolCall)
+
+        dep_ok, dep_reason = check_dependencies(
+            result.tool_name,
+            tools_called,
+            TOOL_DEPENDENCIES,
+        )
+
+        if not dep_ok:
+            recorder.record_validation_error(
+                error_type="dependency_violation",
+                message=dep_reason,
+                raw_model_output=raw_response,
+            )
+            messages.append({"role": "assistant", "content": raw_response})
+            messages.append({
+                "role": "user",
+                "content": (
+                    f"Error: {dep_reason} "
+                    f"Please call the prerequisite tools first."
+                ),
+            })
+            if verbose:
+                print(f"  -> Dependency error: {dep_reason}")
+            continue
+
+        # Step 4: Execute via NAT FunctionGroup
+        if verbose:
+            print(f"  -> Calling via NAT: {result.tool_name}({result.arguments})")
+
+        if result.thought:
+            recorder.record_model_thought(result.thought)
+
+        recorder.record_tool_call(
+            tool_name=result.tool_name,
+            arguments=result.arguments,
+            thought=result.thought,
+            raw_model_output=raw_response,
+        )
+
+        try:
+            tool_result = asyncio.get_event_loop().run_until_complete(
+                invoke_tool_via_group(function_group, result.tool_name, result.arguments)
+            )
+        except RuntimeError:
+            # No running event loop — create one
+            tool_result = asyncio.run(
+                invoke_tool_via_group(function_group, result.tool_name, result.arguments)
+            )
+        except Exception as e:
+            tool_result = {"error": f"Tool execution failed: {e}"}
+
+        recorder.record_tool_result(result.tool_name, tool_result)
+        tools_called.append(result.tool_name)
+
+        if verbose:
+            result_str = json.dumps(tool_result, indent=2)
+            if len(result_str) > 300:
+                result_str = result_str[:300] + "..."
+            print(f"  -> Result: {result_str}")
+
+        # Step 5: Append to conversation history
+        messages.append({"role": "assistant", "content": raw_response})
+        messages.append({
+            "role": "user",
+            "content": f"Tool result for {result.tool_name}:\n{json.dumps(tool_result)}",
+        })
+
+    else:
+        recorder.record_terminal("max_iterations")
+        if verbose:
+            print(f"\n  Stopped: reached max iterations ({max_iterations}).")
+
+    episode = recorder.build_episode()
+
+    if verbose:
+        print(f"\n=== NAT agent episode finished ===")
+        print(f"    Stop reason:     {episode.terminal.reason if episode.terminal else 'unknown'}")
+        print(f"    Tool calls:      {episode.metrics.valid_tool_calls}")
+        print(f"    Model calls:     {episode.metrics.model_calls}")
+        print(f"    Errors:          {episode.metrics.invalid_tool_calls}")
+        print(f"    Repair attempts: {episode.metrics.repair_attempts}")
+        print(f"    Rejects:         {episode.metrics.rejects}")
+        print(f"    Wall time:       {episode.metrics.wall_time_seconds}s")
+        if episode.final_answer:
+            print(f"    Final answer:    {episode.final_answer.get('action', 'N/A')}")
+
+    return episode
+
+
+# -- Trace inspection helpers ----------------------------------------------
 
 
 def trace_to_trajectory(trace: AgentTrace) -> list[dict[str, Any]]:

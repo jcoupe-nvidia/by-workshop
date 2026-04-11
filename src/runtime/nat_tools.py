@@ -130,6 +130,78 @@ def build_nat_tool_registry() -> dict[str, LambdaFunction]:
 
 
 # ---------------------------------------------------------------------------
+# NAT FunctionGroup (unified tool dispatch surface)
+# ---------------------------------------------------------------------------
+
+from nat.builder.function import FunctionGroup, FunctionGroupBaseConfig
+
+
+def build_nat_function_group(
+    instance_name: str = "supply_chain_tools",
+) -> FunctionGroup:
+    """Build a NAT FunctionGroup containing all 9 scenario tools.
+
+    The FunctionGroup is the NAT-canonical way to register, discover,
+    and invoke tools. Each tool is added with its Pydantic input schema
+    so NAT can validate arguments before dispatch.
+
+    The returned group can be used for:
+        - Tool discovery via get_accessible_functions()
+        - Invocation via group.get_all_functions()[name].ainvoke(input)
+        - Schema export for prompt construction
+    """
+    config = FunctionGroupBaseConfig()
+    group = FunctionGroup(config=config, instance_name=instance_name)
+
+    for tool_name in TOOL_REGISTRY:
+        fn, _params, description = TOOL_REGISTRY[tool_name]
+        input_model = TOOL_INPUT_MODELS[tool_name]
+
+        # NAT add_function unpacks Pydantic fields as kwargs to the function,
+        # so the registered callable must accept **kwargs matching the schema.
+        async def _invoke(_fn=fn, **kwargs) -> ToolOutput:
+            result = _fn(**kwargs)
+            return ToolOutput(result=result)
+
+        group.add_function(
+            name=tool_name,
+            fn=_invoke,
+            input_schema=input_model,
+            description=description,
+        )
+
+    return group
+
+
+async def invoke_tool_via_group(
+    group: FunctionGroup,
+    tool_name: str,
+    arguments: dict,
+) -> dict:
+    """Invoke a single tool through a NAT FunctionGroup.
+
+    Looks up the function by name, constructs the Pydantic input,
+    and calls ainvoke(). Returns the result dict.
+
+    Raises KeyError if tool_name is not in the group.
+    """
+    functions = await group.get_all_functions()
+    # FunctionGroup prefixes names: {instance_name}__{tool_name}
+    qualified = f"{group.instance_name}{FunctionGroup.SEPARATOR}{tool_name}"
+    func = functions.get(qualified)
+    if func is None:
+        # Try without prefix for flexibility
+        func = functions.get(tool_name)
+    if func is None:
+        raise KeyError(f"Tool '{tool_name}' not found in FunctionGroup")
+
+    input_model = TOOL_INPUT_MODELS[tool_name]
+    typed_input = input_model(**arguments)
+    output = await func.ainvoke(typed_input)
+    return output.result
+
+
+# ---------------------------------------------------------------------------
 # OpenAI-style tool definitions for ATIF agent.tool_definitions
 # ---------------------------------------------------------------------------
 

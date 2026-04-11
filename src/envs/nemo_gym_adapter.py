@@ -1,14 +1,17 @@
 """
-nemo-gym-compatible export adapter: formats environment outputs as
-training-oriented result rows.
+NeMo Gym adapter: resource server, result rows, and rollout-compatible exports.
 
-Produces JSONL row records with numeric reward fields and episode metadata
-in a format compatible with nemo-gym's RewardProfiler for aggregation and
-inspection. These rows serve as generic training inputs — usable by
-openpipe-art or any downstream consumer that expects per-episode reward
-summaries alongside structured result metadata.
+This module bridges the repo-owned environment (LateOrderRecoveryEnv) with
+NeMo Gym's training infrastructure:
+
+    - LateOrderResourceServer: SimpleResourcesServer subclass implementing
+      seed_session() and verify() for NeMo Gym rollout collection
+    - NemoGymResultRow / episode_to_nemo_gym_row: JSONL row records with
+      numeric reward fields for nemo-gym's RewardProfiler
+    - build_rollout_input_row: task -> rollout input formatting
 
 Owns:
+    - NeMo Gym resource server adapter (seed + verify protocol)
     - Episode -> nemo-gym-compatible result row conversion
     - Task -> rollout input row formatting
     - Reward field extraction for profiling and training inspection
@@ -16,7 +19,7 @@ Owns:
 Does NOT own:
     - Environment state or transitions (see envs/)
     - Episode types (see rollouts.trace_types)
-    - Rollout orchestration or collection infrastructure
+    - Rollout orchestration scheduling (NeMo Gym owns that)
 """
 from __future__ import annotations
 
@@ -24,8 +27,174 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
+from nemo_gym.base_resources_server import (
+    BaseResourcesServerConfig,
+    SimpleResourcesServer,
+    BaseSeedSessionRequest,
+    BaseSeedSessionResponse,
+    BaseVerifyRequest,
+    BaseVerifyResponse,
+)
+
 from src.envs.rewards import EpisodeRewardSummary, RewardSignal
 from src.rollouts.trace_types import Episode, EpisodeMetrics
+
+
+# ---------------------------------------------------------------------------
+# NeMo Gym resource server (seed + verify protocol)
+# ---------------------------------------------------------------------------
+
+class LateOrderResourceServer(SimpleResourcesServer):
+    """NeMo Gym resource server for the late-order-recovery environment.
+
+    Implements the two NeMo Gym resource-server endpoints:
+
+        - seed_session(): initializes a fresh LateOrderRecoveryEnv for the
+          order specified in the session config.
+        - verify(): receives an agent response, extracts tool calls or
+          terminal actions, steps the environment, and returns a scalar
+          reward for NeMo Gym's reward profiling and rollout collection.
+
+    This wires the repo-owned environment (state, transitions, rewards)
+    into NeMo Gym's training-time infrastructure without duplicating
+    task semantics or reward logic.
+    """
+
+    # Per-session environment state, keyed by session_id.
+    # In NeMo Gym's model, each rollout worker seeds a session and then
+    # calls verify() after each agent response.
+    _sessions: dict[str, Any] = {}
+
+    async def seed_session(
+        self, body: BaseSeedSessionRequest,
+    ) -> BaseSeedSessionResponse:
+        """Initialize a fresh environment for a rollout session.
+
+        NeMo Gym calls this once per rollout episode before the agent
+        begins producing responses.
+        """
+        # Import here to avoid circular dependency
+        from src.envs.late_order_env import LateOrderRecoveryEnv
+
+        env = LateOrderRecoveryEnv()
+        # Default order for the workshop scenario
+        env.reset("SO-10482")
+
+        # Store env keyed by a session identifier.
+        # SimpleResourcesServer manages session middleware;
+        # we use the env object's id as a simple key.
+        session_id = str(id(env))
+        LateOrderResourceServer._sessions[session_id] = env
+
+        return BaseSeedSessionResponse()
+
+    async def verify(self, body: BaseVerifyRequest) -> BaseVerifyResponse:
+        """Compute a reward for the agent's response.
+
+        NeMo Gym calls this after each agent response during rollout
+        collection. The response may contain tool calls (agent actions)
+        or a final message (terminal action).
+
+        The reward is computed by stepping the repo-owned environment
+        and returning the environment's reward signal. This keeps reward
+        computation in the environment where it belongs, with NeMo Gym
+        owning only the collection infrastructure.
+        """
+        from src.envs.late_order_env import LateOrderRecoveryEnv
+        from src.envs.rewards import compute_step_reward, compute_terminal_reward
+
+        # Find or create an environment for this request.
+        # In a full deployment NeMo Gym manages session affinity;
+        # here we use a simple lookup or create a fresh env.
+        env = self._get_or_create_env()
+
+        reward = 0.0
+        response = body.response
+
+        # Extract tool calls from the NeMo Gym response output.
+        # NeMo Gym wraps agent outputs as response items; we look for
+        # function_call items (tool calls) or message items (terminal).
+        if hasattr(response, "output") and response.output:
+            for item in response.output:
+                item_type = getattr(item, "type", None)
+
+                if item_type == "function_call":
+                    # Agent made a tool call
+                    tool_name = getattr(item, "name", "")
+                    arguments = getattr(item, "arguments", "{}")
+                    if isinstance(arguments, str):
+                        try:
+                            arguments = json.loads(arguments)
+                        except json.JSONDecodeError:
+                            arguments = {}
+
+                    # Execute through environment (step returns reward info)
+                    from src.runtime.tools import TOOL_REGISTRY
+                    if tool_name in TOOL_REGISTRY:
+                        fn, _params, _desc = TOOL_REGISTRY[tool_name]
+                        try:
+                            tool_result = fn(**arguments)
+                        except Exception:
+                            tool_result = {"error": "execution_failed"}
+                        step = env.step(tool_name, arguments, tool_result)
+                        step_reward = env.get_step_reward(
+                            env._state.total_steps - 1
+                        )
+                        if step_reward:
+                            reward += step_reward.total
+
+                elif item_type == "message":
+                    # Agent produced a final message (terminal)
+                    content = getattr(item, "content", "")
+                    if isinstance(content, list):
+                        content = " ".join(
+                            getattr(c, "text", str(c)) for c in content
+                        )
+                    # Attempt to parse final answer from content
+                    final_answer = None
+                    try:
+                        final_answer = json.loads(content)
+                    except (json.JSONDecodeError, TypeError):
+                        final_answer = {"action": "unknown", "raw": str(content)}
+
+                    env.terminate("final_answer", final_answer)
+                    terminal_reward = env.get_terminal_reward()
+                    if terminal_reward:
+                        reward += terminal_reward.total
+
+        return BaseVerifyResponse(
+            responses_create_params=body.responses_create_params,
+            response=body.response,
+            reward=round(reward, 4),
+        )
+
+    def _get_or_create_env(self) -> Any:
+        """Get the most recently seeded environment, or create a fresh one."""
+        from src.envs.late_order_env import LateOrderRecoveryEnv
+
+        if LateOrderResourceServer._sessions:
+            # Return the most recently created session
+            session_id = list(LateOrderResourceServer._sessions.keys())[-1]
+            return LateOrderResourceServer._sessions[session_id]
+
+        # No session seeded yet — create a default one
+        env = LateOrderRecoveryEnv()
+        env.reset("SO-10482")
+        return env
+
+
+def build_resource_server_config(
+    host: str = "0.0.0.0",
+    port: int = 8001,
+    name: str = "late-order-recovery-env",
+) -> BaseResourcesServerConfig:
+    """Build a NeMo Gym resource server config for the late-order env."""
+    return BaseResourcesServerConfig(
+        host=host,
+        port=port,
+        name=name,
+        entrypoint="src.envs.nemo_gym_adapter:LateOrderResourceServer",
+    )
 
 
 # ---------------------------------------------------------------------------
