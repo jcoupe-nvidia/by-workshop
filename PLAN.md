@@ -8,7 +8,9 @@
 - **Phase 5** is **complete**.
 - **Phase 6** is **complete**.
 - **Phase 7** is **complete**.
-- **Phase 8** is the next phase to implement.
+- **Phase 8** is **complete**.
+
+All migration phases are complete. The repo is fully refactored.
 
 ## Goal
 Reshape the repository from a flat, notebook-led demo into a small library with clear ownership boundaries while preserving the current scenario, deterministic tools, and end-to-end workshop flow described in [CLAUDE.md](CLAUDE.md). The active target stack is NAT for runtime orchestration, repo-owned canonical rollouts and traces, and `openpipe-art` for training-oriented exports and post-training discussion.
@@ -101,14 +103,12 @@ flowchart LR
 - Kept offline reporting human-facing and post hoc; training-relevant reward semantics remain in [src/envs/rewards.py](src/envs/rewards.py) and [src/training/reward_views.py](src/training/reward_views.py).
 - All seven workshop dimensions preserved: skill selection, tool validity, tool accuracy, sequence correctness, task success, recovery quality, efficiency.
 
-### 8. Demote the notebook and finish the public surfaces (pending)
-- Temporary notebook breakage is acceptable during earlier phases; do not spend effort preserving mid-migration cell/API compatibility while the runtime surface is still moving.
-- Update [notebooks/late_order_recovery_workshop.ipynb](notebooks/late_order_recovery_workshop.ipynb) to import the refactored library rather than defining any architecture-critical logic inline.
-- Add a minimal entrypoint in [src/main.py](src/main.py) for running one episode outside the notebook.
-- Move any large scripted trace builders or mini-loop demo helpers out of the notebook into importable code if they still need to exist.
-- Update [README.md](README.md) to describe the new package boundaries, the runtime, environment, rollout, training, and evaluation split, the status of any legacy `systems/` package, and the preserved workshop path.
-- Add migration notes documenting what moved where from [src/tools.py](src/tools.py), [src/skills.py](src/skills.py), [src/schema.py](src/schema.py), [src/agent_loop.py](src/agent_loop.py), [src/fallbacks.py](src/fallbacks.py), [src/evaluation.py](src/evaluation.py), and [src/training_export.py](src/training_export.py).
-- Deliver the documentation items needed for the refactor: updated [README.md](README.md), module docstrings describing responsibilities, migration notes, and a brief note clarifying active `openpipe-art` ownership versus historical trainer-facing, rollout-shaping, and scale-out systems references.
+### 8. Demote the notebook and finish the public surfaces (complete)
+- Updated [notebooks/late_order_recovery_workshop.ipynb](notebooks/late_order_recovery_workshop.ipynb) to import exclusively from canonical modules (`src.runtime.*`, `src.envs.*`, `src.rollouts.*`, `src.training.*`, `src.eval.*`). No backward-compat shim imports remain in the notebook.
+- Moved scripted trace builders out of the notebook into [src/rollouts/scripted_traces.py](src/rollouts/scripted_traces.py), producing canonical `Episode` objects enriched through the environment for rewards.
+- Converted [src/training_export.py](src/training_export.py) from standalone implementation to a backward-compat shim that re-exports from canonical modules and provides `AgentTrace` adapters for legacy consumers.
+- Cleaned up [src/main.py](src/main.py): removed legacy `--structured` flag and `AgentTrace`-based episode path; `--episode` now uses canonical `run_agent_episode()` directly. Expanded `_check_imports()` to cover all canonical and shim modules including `src.rollouts.scripted_traces`, `src.training.reward_views`, `src.training.datasets`, `src.training.experiments`, and `src.eval.reports`.
+- Updated [README.md](README.md) with: package architecture diagram, ownership boundary table, module migration reference (what moved where), updated minimal Python example using canonical imports, CLI usage, historical context note clarifying `openpipe-art` ownership versus earlier trainer-facing and scale-out systems framing, and migration status showing all 8 phases complete.
 
 ## Order Of Execution
 1. Introduce the new package tree and canonical trace and environment interfaces before moving behavior.

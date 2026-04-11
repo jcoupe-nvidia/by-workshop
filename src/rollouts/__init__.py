@@ -5,4 +5,5 @@ Modules:
     episode_runner   -- orchestrate runtime + environment to produce enriched episodes
     serializers      -- Episode <-> JSONL stable serialization
     export_adapters  -- Episode -> training trajectory + ATIF trajectory formats
+    scripted_traces  -- pre-built scripted episodes for workshop demonstration
 """
