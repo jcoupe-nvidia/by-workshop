@@ -7,9 +7,9 @@ Refactor this repository so it cleanly leverages:
 - **NeMo Agent Toolkit (NAT)** for agent runtime orchestration
 - **repo-owned canonical rollouts and trace serialization** for multi-turn episode collection
 - **`openpipe-art`** for policy optimization, post-training, and training-oriented export
-- historical references to earlier rollout, trainer-facing, and scale-out systems framing only where they explain earlier ownership boundaries or design intent
+- historical references to earlier rollout and trainer-facing framing only where they explain earlier ownership boundaries or design intent
 
-The primary goal is to eliminate overlap in responsibilities across runtime, environment logic, rollout collection, evaluation, training semantics, and large-scale training systems, while following best practices for **multi-turn RL training for agent tool-calling agents**.
+The primary goal is to eliminate overlap in responsibilities across runtime, environment logic, rollout collection, evaluation, and training semantics, while following best practices for **multi-turn RL training for agent tool-calling agents**.
 
 This refactor should preserve the workshop/demo value of the repository, but reshape it into a cleaner architecture that can support **real training and export flows** later without depending on outdated stack assumptions.
 
@@ -91,31 +91,7 @@ Owns:
 
 Historical note: earlier versions used a different trainer-facing stack as the primary training-oriented reference. That context may still be mentioned, but it is no longer the active requirement.
 
-### 4. Historical Large-Scale Systems Context
-
-Owns:
-
-- historical notes about distributed training systems concerns
-- historical notes about model construction/import/export where earlier scale-out systems assumptions shaped the design
-- historical notes about checkpoint interoperability and conversion boundaries
-- clearly quarantined legacy systems scaffolding if the repo keeps it around temporarily
-
-This context should answer:
-
-**"If large-scale systems work returns later, where should it live without contaminating the active design?"**
-
-It must **not** own:
-
-- tool-calling runtime behavior
-- episode definitions
-- reward semantics
-- rollout logic
-- business-task environment transitions
-- offline evaluation policy
-
-Historical note: the earlier scale-out systems framing is no longer an active dependency in the current environment. Keep any mention clearly labeled as prior design context.
-
-### 5. The Repository’s Own Environment Layer
+### 4. The Repository’s Own Environment Layer
 
 Owns:
 
@@ -130,7 +106,7 @@ The environment should answer:
 
 **"What is the task state, what actions are valid now, and what happened after an action?"**
 
-This layer must remain independent from runtime orchestration, rollout infrastructure, trainer logic, and distributed systems concerns.
+This layer must remain independent from runtime orchestration, rollout infrastructure, and trainer logic.
 
 ---
 
@@ -145,8 +121,6 @@ Use the following split consistently:
 - **Rollout layer**: canonical multi-turn rollout collection and serialization
 - **`openpipe-art`**: training semantics and post-training logic
 - **Eval layer**: offline benchmarking and reporting
-- **Historical systems context**: any quarantined legacy notes or scaffolding from the earlier scale-out-systems-oriented plan
-
 ### 2. No overlap in responsibility
 
 Avoid these anti-patterns:
@@ -155,22 +129,9 @@ Avoid these anti-patterns:
 - training code redefining tool schemas or runtime prompt policy
 - rollout code implementing task/business logic
 - evaluation code duplicating environment transition rules
-- legacy systems code deciding rewards or rollout structure
 - notebook cells acting as the system of record for architecture
 
-### 3. Treat training semantics and historical systems context as different things
-
-This repo should distinguish clearly between:
-
-- **training semantics**: what to optimize, what rewards to use, what datasets to build, what curriculum to run
-- **historical systems context**: where large-scale execution, parallelism, and checkpoint-boundary concerns would live if that scope returns later
-
-Rule:
-
-- **`openpipe-art` owns active training semantics**
-- **historical scale-out systems notes, if retained, stay quarantined from active implementation priorities**
-
-### 4. Treat the environment as first-class
+### 3. Treat the environment as first-class
 
 The multi-turn order recovery scenario should be represented as an explicit environment/state machine, not as logic scattered across:
 
@@ -191,13 +152,12 @@ This repo should be refactored so it is still lightweight enough for a workshop,
 - distributed RL/post-training jobs
 - richer post-training flows
 - more formal export pipelines
-- optional future systems integration without re-entangling the architecture
 
 ---
 
 ## Target Architecture
 
-Refactor the repo into five active packages plus notebook/demo glue. If a `systems/` package remains temporarily, treat it as legacy scaffolding rather than an active destination.
+Refactor the repo into five active packages plus notebook/demo glue.
 
 ### A. `runtime/`
 Purpose: NAT-facing agent runtime package
@@ -234,7 +194,7 @@ The runtime should expose four canonical interfaces:
 - `get_skill` for detailed reads, loading either the full `SKILL.md` body or a sidecar file by relative path
 - `run_skill_command` for executing scripts present in the skill folder
 
-These interfaces belong to NAT/runtime. They must not migrate into rollout, training, evaluation, or systems layers.
+These interfaces belong to NAT/runtime. They must not migrate into rollout, training, or evaluation layers.
 
 ### B. `envs/`
 Purpose: explicit RL/task environment package
@@ -279,18 +239,7 @@ Owns:
 
 This layer should define **what** gets optimized, not how distributed execution is performed.
 
-### E. `systems/` (legacy or historical only)
-Purpose: quarantined historical systems scaffolding if retained temporarily
-
-Owns:
-
-- historical launch/config sketches
-- historical checkpoint/interoperability notes
-- any temporary legacy system helpers that have not yet been removed
-
-This layer should not define the active training path. If it exists at all, it should remain clearly non-authoritative.
-
-### F. `eval/`
+### E. `eval/`
 Purpose: offline evaluation and reporting
 
 Owns:
@@ -351,8 +300,6 @@ Refactor toward this structure:
 │   │   ├── curriculum.py
 │   │   ├── experiments.py
 │   │   └── reward_views.py
-│   ├── systems/              # optional legacy/historical scaffolding only
-│   │   └── ...
 │   ├── eval/
 │   │   ├── __init__.py
 │   │   ├── metrics.py
@@ -446,7 +393,6 @@ Refactor to:
 - `src/training/datasets.py`
 - `src/training/openpipe_art_adapter.py`
 - `src/training/experiments.py`
-- optional legacy `src/systems/` notes only if older scale-out-systems scaffolding still needs to be quarantined temporarily
 
 Requirements:
 
@@ -455,7 +401,6 @@ Requirements:
 - build training dataset views from that canonical format
 - keep `openpipe-art` integration isolated from runtime code
 - keep rollout serialization isolated from trainer code
-- keep any historical systems sketches isolated from active training semantics
 
 ---
 
@@ -505,7 +450,6 @@ Structured event records should become the source of truth.
 - `runtime/` emits canonical events
 - `rollouts/` serializes canonical events
 - `training/` consumes canonical events as datasets/reward views
-- `systems/` never redefines the event schema
 
 ---
 
@@ -590,7 +534,6 @@ The training design must reward the **decision process** turn by turn.
 
 - `envs/` provides reward-relevant task signals and transition facts
 - `training/` builds trainer-facing reward views
-- `systems/` must not define or alter reward semantics
 
 ---
 
@@ -649,7 +592,6 @@ It must not:
 - redefine tool schemas
 - redefine the task environment
 - define reward semantics
-- define deployment or historical systems settings
 
 ---
 
@@ -689,24 +631,6 @@ It must not decide:
 
 ---
 
-## Historical Systems Context
-
-If the repo keeps a `systems/` package around temporarily, it should be treated as legacy or historical scaffolding rather than an active implementation target.
-
-### Requirements
-
-- isolate any historical systems notes from active training semantics
-- avoid routing current training or export paths through earlier scale-out systems assumptions
-- either remove, archive, or clearly label any remaining systems scaffolding
-
-### Important rule
-
-The earlier scale-out systems framing exists here only as historical context, not as an active dependency or implementation target.
-
-### Ownership rule
-
-The systems layer may decide:
-- how quarantined historical notes are organized if they still exist
 
 It must not decide:
 - tool-calling policies
@@ -736,7 +660,6 @@ The notebook should remain useful, but should no longer contain core system logi
 - define reward logic inline
 - act as the only way to run the system
 - contain the only export path for training artifacts
-- contain the only legacy systems or large-job config path
 
 ---
 
@@ -750,7 +673,6 @@ Claude should execute the refactor in this order.
 2. introduce typed event/trajectory models
 3. introduce environment state and transition skeleton
 4. split runtime schemas from environment validation
-5. establish boundary between active training semantics and any historical systems context
 
 ### Phase 2: Move runtime logic
 
@@ -780,11 +702,11 @@ Claude should execute the refactor in this order.
 3. create `training/openpipe_art_adapter.py`
 4. create `training/experiments.py`
 
-### Phase 6: Remove or quarantine outdated systems assumptions
+### Phase 6: Remove outdated systems assumptions (done)
 
-1. remove active scale-out-systems-first language from docs and interfaces
-2. decide whether `systems/` should be deleted, archived, or clearly marked legacy
-3. ensure no active training/export path depends on systems-layer assumptions
+1. deleted `src/systems/` — empty legacy package, no active code depended on it
+2. removed scale-out config sketch and references from training_export.py, notebook, and docs
+3. confirmed no active training/export path depended on systems-layer assumptions
 
 ### Phase 7: Rebuild offline evaluation
 
@@ -855,14 +777,13 @@ Claude should produce the following as part of the refactor.
 - updated `README.md` describing the new architecture
 - module docstrings explaining responsibilities
 - migration notes summarizing what moved where
-- brief note clarifying active `openpipe-art` responsibilities versus historical trainer-facing, rollout-shaping, and scale-out systems context
+- brief note clarifying active `openpipe-art` responsibilities versus historical trainer-facing and rollout-shaping context
 
 ### Optional but encouraged
 
 - a small CLI entrypoint for running one episode
 - a simple example of serialized trajectory output
 - a short architecture diagram in markdown
-- one example environment-specific or legacy-systems config profile if that scaffolding is retained
 
 ---
 
@@ -897,7 +818,7 @@ The refactor is complete when all of the following are true:
      - `openpipe-art` ingestion
 
 8. **Outdated stack assumptions are contained**
-   - no active implementation path depends on older rollout-stack or scale-out-systems assumptions
+   - no active implementation path depends on older rollout-stack assumptions
    - any remaining references are clearly historical
 
 9. **Existing scenario still works**
