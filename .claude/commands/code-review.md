@@ -19,6 +19,7 @@ Review priorities, in order from most important to least important:
 
 During the review:
 - prioritize findings over summary
+- report only high-severity and medium-severity issues; ignore low-severity nits and minor style feedback
 - focus on architecture, behavioral risks, ownership violations, scalability risks, and missing interfaces rather than style nits
 - evaluate whether the code cleanly separates:
   - runtime orchestration
@@ -52,8 +53,8 @@ During the review:
 Return the review in this format:
 
 ## Findings
-- list issues first, ordered by severity
-- include concrete file references and explain why each issue matters
+- list only high-severity and medium-severity issues, ordered by severity
+- for each issue, include the affected file, concrete evidence from the code or diff, and why the issue matters
 
 ## Open Questions
 - list assumptions, ambiguities, or missing context that affect confidence
