@@ -12,7 +12,7 @@ Do not commit `code-review-issues.md`; treat it as review output only.
 
 Review priorities, in order from most important to least important:
 
-1. Best-practice large-scale RL architecture, with a strong focus on GRPO-readiness.
+1. Best-practice RL architecture, with a strong focus on GRPO-readiness.
 2. Explainability of the code and clarity of responsibility boundaries across NVIDIA software:
    - NeMo Agent Toolkit
    - `openpipe-art`
@@ -29,7 +29,7 @@ During the review:
   - training semantics
   - training systems
   - offline evaluation
-- check whether the design is compatible with large-scale multi-turn RL collection and GRPO-style post-training, including:
+- check whether the design is compatible with multi-turn RL collection and GRPO-style post-training, including:
   - stable canonical trajectory structure
   - clear reward and advantage-consumption boundaries
   - scalable rollout collection surfaces
