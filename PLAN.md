@@ -5,8 +5,9 @@
 - **Phase 2** is **complete**.
 - **Phase 3** is **complete**.
 - **Phase 4** is **complete**.
-- **Phase 5** is the next phase to implement.
-- **Phases 6-8** are pending.
+- **Phase 5** is **complete**.
+- **Phase 6** is the next phase to implement.
+- **Phases 7-8** are pending.
 
 ## Completed Phases To Reopen
 - **Phase 2** must be reopened and partially redone because the runtime package is still backed by repo-local orchestration instead of actual NeMo Agent Toolkit integrations.
@@ -82,7 +83,7 @@ flowchart LR
 - Ensure rollout serialization preserves exact turn order, validation failures, repairs, rejects, and terminal outcomes so ProRL-style collection can scale later without changing the episode schema.
 - Keep rollout code independent from reward semantics and Megatron configuration.
 
-### 5. Build training semantics layer (pending)
+### 5. Build training semantics layer (complete)
 - Break up [src/training_export.py](src/training_export.py) rather than porting it whole.
 - Move trainer-facing data views into [src/training/datasets.py](src/training/datasets.py) and [src/training/reward_views.py](src/training/reward_views.py).
 - Put NeMo RL-specific consumption and adaptation into [src/training/nemo_rl_adapter.py](src/training/nemo_rl_adapter.py), stage definitions into [src/training/experiments.py](src/training/experiments.py), and curriculum staging into [src/training/curriculum.py](src/training/curriculum.py).
