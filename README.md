@@ -68,8 +68,7 @@ src/
 │   └── reports.py       display and report helpers
 │
 ├── scenario_data.py   # Synthetic in-memory data tables
-├── main.py            # CLI entrypoint
-└── <legacy shims>     # Backward-compat re-exports (see migration notes)
+└── main.py            # CLI entrypoint
 ```
 
 ### Ownership boundaries
@@ -169,7 +168,7 @@ The notebook writes generated training artifacts under `artifacts/` when those e
 
 ## Module Migration Reference
 
-The following modules were split during refactoring. The original top-level files remain as backward-compat shims that re-export from their canonical homes.
+The original top-level modules were split during refactoring and then removed. This table documents where everything moved.
 
 | Original module | Canonical location(s) |
 |---|---|
@@ -180,8 +179,6 @@ The following modules were split during refactoring. The original top-level file
 | `src/fallbacks.py` | `src/runtime/fallbacks.py` |
 | `src/evaluation.py` | `src/eval/metrics.py` + `src/eval/reports.py` |
 | `src/training_export.py` | `src/rollouts/export_adapters.py` + `src/training/reward_views.py` + `src/training/datasets.py` |
-
-The notebook imports from the canonical modules directly. The shims exist only for external consumers that may still reference the old paths.
 
 ## Migration Status
 
