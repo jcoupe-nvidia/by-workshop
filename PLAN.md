@@ -2,8 +2,9 @@
 
 ## Current Status
 - **Phase 1** is **complete**.
-- **Phase 2** is the current starting phase and is **not yet completed**.
-- **Phases 3-8** are pending.
+- **Phase 2** is **complete**.
+- **Phase 3** is the current starting phase and is **not yet completed**.
+- **Phases 4-8** are pending.
 
 ## Goal
 Reshape the repository from a flat, notebook-led demo into a small library with clear ownership boundaries that match [REFACTOR.md](REFACTOR.md) while preserving the current scenario, deterministic tools, and end-to-end workshop flow described in [CLAUDE.md](CLAUDE.md).
@@ -42,7 +43,7 @@ flowchart LR
 - Split [src/schema.py](src/schema.py) into runtime-facing action schemas in [src/runtime/schemas.py](src/runtime/schemas.py) and task-specific validity rules in [src/envs/validators.py](src/envs/validators.py).
 - Preserve [src/scenario_data.py](src/scenario_data.py) as the deterministic data source unless a tiny wrapper is needed for environment initialization; do not rewrite the synthetic data model unless required for formal environment state.
 
-### 2. Refactor runtime into a NAT-friendly single-episode layer (current)
+### 2. Refactor runtime into a NAT-friendly single-episode layer (complete)
 - Move deterministic tool implementations from [src/tools.py](src/tools.py) into [src/runtime/tools.py](src/runtime/tools.py) and keep the registry and schema metadata there.
 - Rename the skill layer from [src/skills.py](src/skills.py) into [src/runtime/workflows.py](src/runtime/workflows.py) so it represents runtime workflow decomposition rather than training semantics.
 - Split [src/agent_loop.py](src/agent_loop.py) into small runtime modules:
@@ -52,7 +53,7 @@ flowchart LR
 - Move fallback handling from [src/fallbacks.py](src/fallbacks.py) into explicit runtime parsing and repair behavior, but record repair and reject outcomes as structured events instead of silently normalizing them away.
 - Keep [documents/llm-access.md](documents/llm-access.md) as the source of truth for the local model endpoint and model id.
 
-### 3. Make the environment explicit (pending)
+### 3. Make the environment explicit (current)
 - Add [src/envs/state.py](src/envs/state.py), [src/envs/transitions.py](src/envs/transitions.py), [src/envs/rewards.py](src/envs/rewards.py), and [src/envs/late_order_env.py](src/envs/late_order_env.py).
 - Encode the late-order-recovery state machine here: known facts, completed subgoals, allowed next actions, terminal conditions, invalid-action counters, and reward-relevant transition facts.
 - Ensure environment state covers the scenario facts called out in [REFACTOR.md](REFACTOR.md): order id, source DC status, alternate DC feasibility, supplier expedite feasibility, partial-fulfillment feasibility, substitute SKU viability, tool calls already made, current recommendation candidate, failure flags, invalid-action counters, and terminal status.
