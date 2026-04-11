@@ -3,11 +3,12 @@
 ## Current Status
 - **Phase 1** is **complete**.
 - **Phase 2** is **complete**.
-- **Phase 3** is the current starting phase and is **not yet completed**.
-- **Phases 4-8** are pending.
+- **Phase 3** is **complete**.
+- **Phase 4** is the next phase to implement.
+- **Phases 5-8** are pending.
 
 ## Goal
-Reshape the repository from a flat, notebook-led demo into a small library with clear ownership boundaries that match [REFACTOR.md](REFACTOR.md) while preserving the current scenario, deterministic tools, and end-to-end workshop flow described in [CLAUDE.md](CLAUDE.md).
+Reshape the repository from a flat, notebook-led demo into a small library with clear ownership boundaries while preserving the current scenario, deterministic tools, and end-to-end workshop flow described in [CLAUDE.md](CLAUDE.md).
 
 ## Current Pressure Points
 - [src/agent_loop.py](src/agent_loop.py) currently mixes model I/O, prompt policy, validation, fallback repair, trace capture, and trajectory shaping.
@@ -59,10 +60,10 @@ flowchart LR
 - Move fallback handling from [src/fallbacks.py](src/fallbacks.py) into explicit runtime parsing and repair behavior, but record repair and reject outcomes as structured events instead of silently normalizing them away.
 - Keep [documents/llm-access.md](documents/llm-access.md) as the source of truth for the local model endpoint and model id.
 
-### 3. Make the environment explicit (current)
+### 3. Make the environment explicit (complete)
 - Add [src/envs/state.py](src/envs/state.py), [src/envs/transitions.py](src/envs/transitions.py), [src/envs/rewards.py](src/envs/rewards.py), and [src/envs/late_order_env.py](src/envs/late_order_env.py).
 - Encode the late-order-recovery state machine here: known facts, completed subgoals, allowed next actions, terminal conditions, invalid-action counters, and reward-relevant transition facts.
-- Ensure environment state covers the scenario facts called out in [REFACTOR.md](REFACTOR.md): order id, source DC status, alternate DC feasibility, supplier expedite feasibility, partial-fulfillment feasibility, substitute SKU viability, tool calls already made, current recommendation candidate, failure flags, invalid-action counters, and terminal status.
+- Ensure environment state covers the core scenario facts: order id, source DC status, alternate DC feasibility, supplier expedite feasibility, partial-fulfillment feasibility, substitute SKU viability, tool calls already made, current recommendation candidate, failure flags, invalid-action counters, and terminal status.
 - Move prerequisite and sequence-sensitive task semantics out of ad hoc checks in [src/tools.py](src/tools.py), [src/schema.py](src/schema.py), and [src/evaluation.py](src/evaluation.py) so the environment becomes the single authority on what happened and what was valid now.
 - Keep deterministic tool execution unchanged in behavior; the environment should govern validity and state transitions, not replace the tool outputs.
 - Implement dense, sequence-aware reward inputs here rather than only final success checks. At minimum, capture signals for valid structured tool calls, correct tool choice for current state, correct argument extraction, dependency satisfaction, non-redundancy, progress toward resolution, correct final recommendation, and concise completion.
@@ -79,7 +80,7 @@ flowchart LR
 - Move trainer-facing data views into [src/training/datasets.py](src/training/datasets.py) and [src/training/reward_views.py](src/training/reward_views.py).
 - Put NeMo RL-specific consumption and adaptation into [src/training/nemo_rl_adapter.py](src/training/nemo_rl_adapter.py), stage definitions into [src/training/experiments.py](src/training/experiments.py), and curriculum staging into [src/training/curriculum.py](src/training/curriculum.py).
 - Treat NeMo RL as the owner of reward views, datasets, and staged training progression.
-- Design the training layer to support the staged progression required by [REFACTOR.md](REFACTOR.md): SFT on successful trajectories, short-horizon RL with dense rewards, full multi-turn RL with sequence-aware rewards, and a robustness curriculum with malformed calls and dead ends.
+- Design the training layer to support staged progression: SFT on successful trajectories, short-horizon RL with dense rewards, full multi-turn RL with sequence-aware rewards, and a robustness curriculum with malformed calls and dead ends.
 
 ### 6. Build scalable training systems layer (pending)
 - Create the Megatron-facing systems package: [src/systems/megatron_bridge.py](src/systems/megatron_bridge.py), [src/systems/parallelism.py](src/systems/parallelism.py), [src/systems/checkpointing.py](src/systems/checkpointing.py), [src/systems/launch_configs.py](src/systems/launch_configs.py), and [src/systems/model_recipes.py](src/systems/model_recipes.py).
@@ -92,19 +93,20 @@ flowchart LR
 - Preserve the current workshop dimensions where they still make sense, but make them consume canonical traces instead of bespoke `AgentTrace` structures.
 
 ### 8. Demote the notebook and finish the public surfaces (pending)
+- Temporary notebook breakage is acceptable during earlier phases; do not spend effort preserving mid-migration cell/API compatibility while the runtime surface is still moving.
 - Update [notebooks/late_order_recovery_workshop.ipynb](notebooks/late_order_recovery_workshop.ipynb) to import the refactored library rather than defining any architecture-critical logic inline.
 - Add a minimal entrypoint in [src/main.py](src/main.py) for running one episode outside the notebook.
 - Move any large scripted trace builders or mini-loop demo helpers out of the notebook into importable code if they still need to exist.
 - Update [README.md](README.md) to describe the new package boundaries, the runtime, environment, rollout, training, and systems split, and the preserved workshop path.
 - Add migration notes documenting what moved where from [src/tools.py](src/tools.py), [src/skills.py](src/skills.py), [src/schema.py](src/schema.py), [src/agent_loop.py](src/agent_loop.py), [src/fallbacks.py](src/fallbacks.py), [src/evaluation.py](src/evaluation.py), and [src/training_export.py](src/training_export.py).
-- Deliver the documentation items called out in [REFACTOR.md](REFACTOR.md): updated [README.md](README.md), module docstrings describing responsibilities, migration notes, and a brief note clarifying NeMo RL versus Megatron ownership boundaries.
+- Deliver the documentation items needed for the refactor: updated [README.md](README.md), module docstrings describing responsibilities, migration notes, and a brief note clarifying NeMo RL versus Megatron ownership boundaries.
 
 ## Order Of Execution
 1. Introduce the new package tree and canonical trace and environment interfaces before moving behavior.
-2. Move runtime code next so the agent can still run one episode against the new contracts.
+2. Move runtime code next so the agent can still run one episode against the new contracts, even if the notebook is temporarily out of sync.
 3. Formalize environment state, validation, and reward inputs before splitting training and evaluation.
 4. Split rollout serialization and dataset views only after the trace contract is stable.
-5. Finish with notebook rewiring, docs, and verification.
+5. Finish with notebook rewiring, docs, and verification after the runtime public surfaces are stable.
 
 ## Implementation Constraints
 - Prefer small typed modules, focused functions, side-effect-light code, explicit public interfaces, and no hidden global state.
@@ -113,6 +115,7 @@ flowchart LR
 - Keep large-job system configuration separate from experiment and reward semantics.
 - Preserve the workshop scenario behavior, the current late-order-recovery flow, deterministic tool semantics, and the ability to run a local end-to-end demo.
 - Prefer directory-backed skills with concise `SKILL.md` files plus optional sidecars and scripts over growing a single catch-all workflow module.
+- Temporary notebook breakage during migration is acceptable; only the final state needs a working notebook consumer over the new library surfaces.
 - Do not introduce unnecessary feature expansion or speculative abstractions without immediate use.
 - Do not rewrite [src/scenario_data.py](src/scenario_data.py) unless environment formalization requires it.
 - Do not remove the notebook; demote it to a consumer.
@@ -135,4 +138,4 @@ flowchart LR
 - One local episode still runs end-to-end for `SO-10482`, preserving the existing workshop scenario.
 
 ## Main Risk To Watch
-The biggest implementation risk is moving too much behavior at once and breaking the demo. The safest approach is to land the shared contracts first, then migrate one concern at a time while keeping a thin compatibility path until the notebook and entrypoints have been switched over.
+The biggest implementation risk is moving too much behavior at once and breaking the demo. The safest approach is to land the shared contracts first, then migrate one concern at a time without preserving notebook compatibility mid-stream, and only rewire the notebook and entrypoints once the runtime surfaces are stable.

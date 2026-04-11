@@ -3,14 +3,20 @@ Task-specific validity rules for the late-order recovery environment.
 
 Owns:
     - Tool call dependency checking (sequence-sensitive prerequisites)
+    - Environment-state-aware validation via check_preconditions
     - Any future environment-specific constraints on tool arguments
 
 Does NOT own:
     - Structural JSON schema validation (see runtime.schemas)
-    - Reward computation (see envs.rewards, future)
+    - Reward computation (see envs.rewards)
     - Runtime prompt or orchestration policy
 """
 from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.envs.state import LateOrderEnvState
 
 
 def check_dependencies(
@@ -22,6 +28,10 @@ def check_dependencies(
 
     This encodes the task-specific sequencing rules: certain tools require
     prerequisite information that can only come from earlier tool calls.
+
+    This is the backward-compatible interface used by the runtime agent
+    loop. For environment-state-aware validation, use
+    envs.transitions.check_preconditions instead.
 
     Args:
         tool_name: The tool about to be called.
@@ -42,3 +52,27 @@ def check_dependencies(
             f"Tools called so far: {called_tools}."
         )
     return True, f"Dependencies satisfied for '{tool_name}'."
+
+
+def check_dependencies_from_state(
+    tool_name: str,
+    state: LateOrderEnvState,
+) -> tuple[bool, str]:
+    """Check dependencies using environment state instead of raw lists.
+
+    This is a convenience wrapper that extracts the called-tools set
+    from the environment state and delegates to the transition layer's
+    check_preconditions for the full validity check.
+
+    Args:
+        tool_name: The tool about to be called.
+        state: Current environment state.
+
+    Returns:
+        (is_valid, reason) tuple.
+    """
+    from src.envs.transitions import check_preconditions
+    ok, err_type, err_msg = check_preconditions(state, tool_name)
+    if ok:
+        return True, f"Dependencies satisfied for '{tool_name}'."
+    return False, err_msg or f"Cannot call '{tool_name}'."
