@@ -150,11 +150,12 @@ class LateOrderResourceServer(SimpleResourcesServer):
         """Look up the session for the request.
 
         Uses session_id from the request when available. Falls back to
-        creating a fresh session only when no session has been seeded
-        (e.g. in unit tests).
-        """
-        from src.envs.late_order_env import LateOrderRecoveryEnv
+        the sole active session for single-session use. In all other
+        cases, fails closed to prevent misrouted verify() traffic.
 
+        Fallback sessions are registered in _sessions under a stable id
+        so that export/read APIs can retrieve them afterward.
+        """
         # Try to extract session_id from the request body.
         session_id = getattr(body, "session_id", None)
         if session_id and session_id in _sessions:
@@ -165,7 +166,19 @@ class LateOrderResourceServer(SimpleResourcesServer):
         if len(_sessions) == 1:
             return next(iter(_sessions.values()))
 
-        # No session found — create a default one (demo-only path).
+        # No session found and multiple (or zero) sessions exist.
+        # Fail closed rather than silently creating an untracked session.
+        if _sessions:
+            raise ValueError(
+                f"session_id '{session_id}' not found among "
+                f"{len(_sessions)} active sessions. "
+                f"Call seed_session() first or pass a valid session_id."
+            )
+
+        # Zero sessions: create a fallback and register it so that
+        # downstream export APIs (get_session_episode, etc.) can find it.
+        from src.envs.late_order_env import LateOrderRecoveryEnv
+
         env = LateOrderRecoveryEnv()
         env.reset("SO-10482")
         recorder = EpisodeRecorder(
@@ -173,7 +186,10 @@ class LateOrderResourceServer(SimpleResourcesServer):
             task_prompt="NeMo Gym rollout for SO-10482",
             model_id="nemo-gym-rollout",
         )
-        return _NemoGymSession(env=env, recorder=recorder)
+        fallback_id = str(uuid.uuid4())
+        session = _NemoGymSession(env=env, recorder=recorder)
+        _sessions[fallback_id] = session
+        return session
 
     @staticmethod
     def get_session_episode(session_id: str) -> Episode | None:

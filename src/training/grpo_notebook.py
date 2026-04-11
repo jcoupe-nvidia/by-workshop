@@ -54,6 +54,31 @@ from src.training.openpipe_art_adapter import (
     save_art_group_jsonl,
 )
 
+# Minimum openpipe-art version required for live (non-dry-run) training.
+# The pinned 0.5.6 in environment.yaml lacks TrainableModel, backend.train(),
+# and the richer TrajectoryGroup metadata/metrics surfaces.
+_MIN_ART_VERSION_FOR_TRAINING = "0.6.0"
+
+
+def _check_art_version_for_training() -> None:
+    """Fail fast if the installed openpipe-art is too old for live training.
+
+    The dry-run path and trajectory export work on 0.5.6, but the
+    backend.train() entrypoint requires >= 0.6.0. This prevents a
+    confusing runtime AttributeError deep in the training loop.
+    """
+    from importlib.metadata import version as pkg_version
+    from packaging.version import Version
+
+    installed = pkg_version("openpipe-art")
+    if Version(installed) < Version(_MIN_ART_VERSION_FOR_TRAINING):
+        raise RuntimeError(
+            f"Live GRPO training requires openpipe-art >= {_MIN_ART_VERSION_FOR_TRAINING}, "
+            f"but {installed} is installed. The environment.yaml pins 0.5.6 for "
+            f"nemo-gym compatibility. Use dry_run=True for the current environment, "
+            f"or update openpipe-art when a compatible version set is available."
+        )
+
 
 # ---------------------------------------------------------------------------
 # Result types
@@ -348,7 +373,9 @@ def run_grpo_notebook(
     if dry_run:
         train_metrics = _dry_run_train(trajectory_group, stage_config)
     else:
-        # Real training via art backend
+        # Real training via art backend — requires openpipe-art >= 0.6.0
+        # for TrainableModel, backend.train(), and richer TrajectoryGroup API.
+        _check_art_version_for_training()
         import asyncio
 
         model = art.TrainableModel(

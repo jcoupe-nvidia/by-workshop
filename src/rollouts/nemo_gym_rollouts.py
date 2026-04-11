@@ -43,6 +43,7 @@ from src.envs.nemo_gym_adapter import (
     save_nemo_gym_rows_jsonl,
 )
 from src.rollouts.episode_runner import EnrichedEpisodeResult
+from src.rollouts.trace_types import Episode, EventType, ToolCallPayload
 
 
 # ---------------------------------------------------------------------------
@@ -52,6 +53,15 @@ from src.rollouts.episode_runner import EnrichedEpisodeResult
 # record loop for NeMo Gym training-time rollout collection. The NeMo Gym
 # resource server in envs/ delegates here so that envs/ stays focused on
 # environment validation surfaces while rollouts/ owns execution plumbing.
+#
+# NOTE: This pipeline re-uses validate_tool_call, try_repair, and
+# FallbackAction from src.runtime.* but orchestrates them with real-time
+# environment interaction (env.step, env.record_invalid, etc.) which the
+# runtime's interactive agent loop does not do. The interactive runtime
+# attaches rewards post-hoc via episode_runner.enrich_episode(). If the
+# core validate → repair → reject logic changes in runtime, this pipeline
+# must be updated to match. A shared runtime-owned helper is a future
+# option but deferred to avoid premature abstraction in a pedagogical repo.
 
 
 @dataclass
@@ -249,6 +259,43 @@ def process_agent_actions(
     for action in actions:
         total += process_agent_action(action, env, recorder)
     return total
+
+
+# ---------------------------------------------------------------------------
+# Per-event reward attachment
+# ---------------------------------------------------------------------------
+
+
+def _attach_event_rewards(episode: Episode, env: Any) -> None:
+    """Populate Event.reward on episode events from the environment's step rewards.
+
+    After environment-backed execution, the env holds dense step rewards
+    and a terminal reward. This function walks the episode events and
+    attaches the corresponding reward to each TOOL_CALL, VALIDATION_ERROR,
+    and TERMINAL_OUTCOME event, matching the same annotation contract that
+    enrich_episode() provides for the interactive runtime path.
+
+    Mutates episode.events in place.
+    """
+    step_idx = 0
+    step_rewards = env._step_rewards
+    terminal_reward = env._terminal_reward
+
+    for event in episode.events:
+        if event.event_type == EventType.TOOL_CALL:
+            payload = event.payload
+            if isinstance(payload, ToolCallPayload) and step_idx < len(step_rewards):
+                event.reward = step_rewards[step_idx].total
+                step_idx += 1
+
+        elif event.event_type == EventType.TOOL_VALIDATION_ERROR:
+            if step_idx < len(step_rewards):
+                event.reward = step_rewards[step_idx].total
+                step_idx += 1
+
+        elif event.event_type == EventType.TERMINAL_OUTCOME:
+            if terminal_reward is not None:
+                event.reward = terminal_reward.total
 
 
 # ---------------------------------------------------------------------------
@@ -463,6 +510,11 @@ def collect_environment_backed_rollout(
     # Get reward summary directly from the environment (real-time, not post-hoc)
     reward_summary = env.get_episode_reward_summary()
     episode.metrics.total_reward = round(reward_summary.total_reward, 4)
+
+    # Attach per-event rewards from the environment so that downstream
+    # exporters (episode_to_training_trajectory, episode_to_art_trajectory)
+    # see the same dense reward annotations as the enrich_episode() path.
+    _attach_event_rewards(episode, env)
 
     return EnrichedEpisodeResult(
         episode=episode,

@@ -24,9 +24,13 @@ from src.training.grpo_notebook import (
     run_grpo_notebook,
     GRPORunResult,
     _dry_run_train,
+    _check_art_version_for_training,
 )
+from src.training.openpipe_art_adapter import get_group_metadata
 from src.training.curriculum import TrainingStage, get_stage_config
+from src.training.datasets import build_training_dataset, _truncate_reward_summary
 from src.rollouts.episode_runner import EnrichedEpisodeResult
+from src.rollouts.trace_types import EventType
 
 
 # ---------------------------------------------------------------------------
@@ -83,8 +87,9 @@ class TestBuildGrpoGroupFromRollouts:
 
     def test_group_has_grpo_metadata(self, rollouts):
         group, _, _ = build_grpo_group_from_rollouts(rollouts)
-        assert group.metadata["method"] == "grpo"
-        assert group.metadata["stage"] == "full_multiturn_rl"
+        metadata = get_group_metadata(group)
+        assert metadata["method"] == "grpo"
+        assert metadata["stage"] == "full_multiturn_rl"
 
     def test_trajectories_have_advantage_metadata(self, rollouts):
         group, _, _ = build_grpo_group_from_rollouts(rollouts)
@@ -116,7 +121,7 @@ class TestBuildGrpoGroupFromRollouts:
             rollouts, stage=TrainingStage.SHORT_HORIZON_RL,
         )
         assert stage_config.stage == TrainingStage.SHORT_HORIZON_RL
-        assert group.metadata["stage"] == "short_horizon_rl"
+        assert get_group_metadata(group)["stage"] == "short_horizon_rl"
 
     def test_trajectories_have_positive_rewards(self, rollouts):
         group, _, _ = build_grpo_group_from_rollouts(rollouts)
@@ -295,3 +300,116 @@ class TestRunGrpoNotebook:
             captured = capsys.readouterr()
             assert "GRPO Run Summary" in captured.out
             assert "dry-run" in captured.out
+
+
+# ---------------------------------------------------------------------------
+# Fix validation: truncated reward summary
+# ---------------------------------------------------------------------------
+
+class TestTruncatedRewardSummaryConsistency:
+    """When build_training_dataset truncates an episode, the TrainingRecord's
+    reward_summary must match the truncated events, not the full episode."""
+
+    def test_truncated_record_has_fewer_step_rewards(self):
+        """A truncated TrainingRecord should carry only the reward signals
+        for the retained tool calls."""
+        rollouts = collect_enriched_rollouts(num_rollouts=1)
+        # Use a stage config with very short max_episode_length to force truncation
+        stage_config = get_stage_config(TrainingStage.SHORT_HORIZON_RL)
+
+        # The SHORT_HORIZON_RL stage has max_episode_length=3 typically
+        dataset = build_training_dataset(rollouts, stage_config)
+
+        for record in dataset.records:
+            n_valid = record.episode.metrics.valid_tool_calls
+            n_step_rewards = len(record.reward_summary.step_rewards)
+            assert n_step_rewards == n_valid, (
+                f"TrainingRecord has {n_step_rewards} step rewards but "
+                f"{n_valid} valid tool calls after truncation"
+            )
+
+    def test_truncated_record_has_no_terminal_reward(self):
+        """Truncated episodes lose their terminal, so the reward summary
+        should have terminal_reward=None."""
+        rollouts = collect_enriched_rollouts(num_rollouts=1)
+        stage_config = get_stage_config(TrainingStage.SHORT_HORIZON_RL)
+        dataset = build_training_dataset(rollouts, stage_config)
+
+        for record in dataset.records:
+            if record.episode.terminal is None:
+                # This record was truncated
+                assert record.reward_summary.terminal_reward is None
+
+    def test_truncated_total_reward_matches_step_sum(self):
+        """The truncated reward_summary.total_reward should match the sum
+        of its step_rewards totals."""
+        rollouts = collect_enriched_rollouts(num_rollouts=1)
+        stage_config = get_stage_config(TrainingStage.SHORT_HORIZON_RL)
+        dataset = build_training_dataset(rollouts, stage_config)
+
+        for record in dataset.records:
+            expected = sum(sr.total for sr in record.reward_summary.step_rewards)
+            if record.reward_summary.terminal_reward:
+                expected += record.reward_summary.terminal_reward.total
+            assert abs(record.reward_summary.total_reward - round(expected, 4)) < 1e-4
+
+
+# ---------------------------------------------------------------------------
+# Fix validation: openpipe-art version gate
+# ---------------------------------------------------------------------------
+
+class TestArtVersionGate:
+    """The version check should raise RuntimeError for openpipe-art 0.5.6."""
+
+    def test_version_check_raises_on_old_art(self):
+        """With the pinned 0.5.6, _check_art_version_for_training should raise."""
+        with pytest.raises(RuntimeError, match="openpipe-art >= 0.6.0"):
+            _check_art_version_for_training()
+
+
+# ---------------------------------------------------------------------------
+# Fix validation: per-event rewards in NeMo Gym rollouts
+# ---------------------------------------------------------------------------
+
+class TestNemoGymRolloutEventRewards:
+    """Environment-backed rollouts should have per-event reward annotations,
+    matching the same contract as enrich_episode()."""
+
+    def test_tool_call_events_have_rewards(self):
+        """Every TOOL_CALL event in an environment-backed rollout should
+        have a non-None reward."""
+        rollouts = collect_enriched_rollouts(num_rollouts=1)
+        episode = rollouts[0].episode
+
+        tool_call_events = [
+            e for e in episode.events
+            if e.event_type == EventType.TOOL_CALL
+        ]
+        assert len(tool_call_events) > 0
+        for e in tool_call_events:
+            assert e.reward is not None, (
+                f"TOOL_CALL event at step {e.step_index} has reward=None"
+            )
+
+    def test_terminal_event_has_reward(self):
+        """The TERMINAL_OUTCOME event should have a non-None reward."""
+        rollouts = collect_enriched_rollouts(num_rollouts=1)
+        episode = rollouts[0].episode
+
+        terminal_events = [
+            e for e in episode.events
+            if e.event_type == EventType.TERMINAL_OUTCOME
+        ]
+        assert len(terminal_events) == 1
+        assert terminal_events[0].reward is not None
+
+    def test_event_rewards_sum_to_total(self):
+        """The sum of all event rewards should approximately equal
+        the episode total reward."""
+        rollouts = collect_enriched_rollouts(num_rollouts=1)
+        episode = rollouts[0].episode
+
+        event_reward_sum = sum(
+            e.reward for e in episode.events if e.reward is not None
+        )
+        assert abs(event_reward_sum - episode.metrics.total_reward) < 0.1
