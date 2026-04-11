@@ -2,7 +2,7 @@
 Minimal entrypoint for running one episode outside the notebook.
 
 Usage:
-    python -m src.main [--order ORDER_ID] [--check-imports] [--episode]
+    python -m src.main [--order ORDER_ID] [--check-imports] [--episode] [--rollout]
 
 This validates the package structure imports correctly and can run
 a full agent episode against the local model endpoint.
@@ -37,11 +37,25 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Use structured Episode output instead of legacy AgentTrace.",
     )
+    parser.add_argument(
+        "--rollout",
+        action="store_true",
+        help="Run via the rollout layer (enriched episode with env rewards).",
+    )
+    parser.add_argument(
+        "--save-jsonl",
+        default=None,
+        help="Save the episode to a JSONL file (requires --rollout).",
+    )
     args = parser.parse_args(argv)
 
     if args.check_imports:
         _check_imports()
         print("All package imports OK.")
+        return
+
+    if args.rollout:
+        _run_rollout(args.order, save_path=args.save_jsonl)
         return
 
     if args.episode:
@@ -50,6 +64,7 @@ def main(argv: list[str] | None = None) -> None:
 
     print(f"Order: {args.order}")
     print("Use --episode to run a full agent episode against the local model.")
+    print("Use --rollout to run via the rollout layer with env rewards.")
     print("Use --check-imports to validate package structure.")
 
 
@@ -65,11 +80,22 @@ def _check_imports() -> None:
     import src.runtime.tracing
     import src.runtime.agent
 
-    # Other packages from Phase 1
+    # Environment package
     import src.envs
     import src.envs.validators
+    import src.envs.state
+    import src.envs.transitions
+    import src.envs.rewards
+    import src.envs.late_order_env
+
+    # Rollouts package
     import src.rollouts
     import src.rollouts.trace_types
+    import src.rollouts.episode_runner
+    import src.rollouts.serializers
+    import src.rollouts.prorl_adapter
+
+    # Other packages
     import src.training
     import src.training.curriculum
     import src.systems
@@ -84,6 +110,29 @@ def _check_imports() -> None:
     import src.agent_loop
     import src.evaluation
     import src.training_export
+
+
+def _run_rollout(order_id: str, save_path: str | None = None) -> None:
+    """Run one episode via the rollout layer with environment rewards."""
+    from src.rollouts.episode_runner import run_enriched_episode
+    from src.rollouts.serializers import save_episodes_jsonl
+    from src.rollouts.prorl_adapter import episode_to_nemo_trajectory
+
+    result = run_enriched_episode(order_id)
+    print()
+    result.print_summary()
+
+    # Show NeMo RL trajectory conversion
+    trajectory = episode_to_nemo_trajectory(
+        result.episode,
+        reward_summary=result.reward_summary,
+    )
+    print(f"\nNeMo RL trajectory: {trajectory.episode_length} steps, "
+          f"total reward {trajectory.total_reward:+.4f}")
+
+    if save_path:
+        save_episodes_jsonl([result.episode], save_path)
+        print(f"Saved episode to {save_path}")
 
 
 def _run_episode(order_id: str, structured: bool = False) -> None:
