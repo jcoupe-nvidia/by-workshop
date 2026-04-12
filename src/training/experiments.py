@@ -130,7 +130,7 @@ _SHORT_HORIZON_RL_HYPERPARAMS: dict[str, Any] = {
     "baseline": "group_mean",
 }
 
-_FULL_MULTITURN_RL_HYPERPARAMS: dict[str, Any] = {
+_FULL_MULTISTEP_RL_HYPERPARAMS: dict[str, Any] = {
     "method": "grpo",
     "learning_rate": 5e-7,
     "batch_size": 4,
@@ -175,12 +175,12 @@ def build_default_experiment_plan(
 
     sft_config = get_stage_config(TrainingStage.SFT_SUCCESSFUL)
     short_config = get_stage_config(TrainingStage.SHORT_HORIZON_RL)
-    full_config = get_stage_config(TrainingStage.FULL_MULTITURN_RL)
+    full_config = get_stage_config(TrainingStage.FULL_MULTISTEP_RL)
     robust_config = get_stage_config(TrainingStage.ROBUSTNESS)
 
     sft_output = f"{base_output_dir}/01_sft"
     short_output = f"{base_output_dir}/02_short_horizon_rl"
-    full_output = f"{base_output_dir}/03_full_multiturn_rl"
+    full_output = f"{base_output_dir}/03_full_multistep_rl"
     robust_output = f"{base_output_dir}/04_robustness"
 
     experiments = [
@@ -218,17 +218,17 @@ def build_default_experiment_plan(
             ),
         ),
         ExperimentConfig(
-            name="03_full_multiturn_rl",
-            stage=TrainingStage.FULL_MULTITURN_RL,
+            name="03_full_multistep_rl",
+            stage=TrainingStage.FULL_MULTISTEP_RL,
             stage_config=full_config,
             model_name=model_name,
-            data_dir=f"{base_data_dir}/full_multiturn",
+            data_dir=f"{base_data_dir}/full_multistep",
             output_dir=full_output,
-            hyperparameters=_FULL_MULTITURN_RL_HYPERPARAMS,
+            hyperparameters=_FULL_MULTISTEP_RL_HYPERPARAMS,
             reward_config=full_config.reward_config,
             checkpoint_from=f"{short_output}/checkpoint_best",
             notes=(
-                "Full multi-turn GRPO on complete episodes (5-10 tool calls). "
+                "Full multi-step GRPO on complete episodes (5-10 tool calls). "
                 "Sequence-aware rewards covering the full decision process: "
                 "diagnosis, assessment, alternate recovery, recommendation. "
                 "Group-relative advantage over grouped trajectories."
@@ -259,7 +259,7 @@ def build_default_experiment_plan(
         description=(
             "4-stage curriculum for training a tool-calling agent on the "
             "late-order recovery scenario (SO-10482). Progresses from SFT "
-            "through short-horizon GRPO, full multi-turn GRPO, and robustness "
+            "through short-horizon GRPO, full multi-step GRPO, and robustness "
             "training. RL stages use GRPO with group-relative advantage over "
             "grouped trajectories. Exports are consumed by NeMo RL."
         ),

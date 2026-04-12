@@ -2,10 +2,17 @@
 Full GRPO training run for the late-order recovery supply chain scenario.
 
 Uses NeMo RL's GRPO algorithm with:
-    - Custom single-turn environment that scores tool-call quality
-    - IterableDataset generating supply chain prompts
+    - Multi-step environment that validates tool-call sequences using the
+      repo-owned LateOrderRecoveryEnv (dependency checking, subgoal tracking,
+      dense decomposed rewards)
+    - IterableDataset generating supply chain prompts with canonical system prompt
     - Nemotron-3-Nano model (FP8 weights via DTensor v2)
     - 7 GPUs (GPU 0 reserved for NIM inference server)
+
+The environment scores multi-step tool-call sequences with the same
+semantics as the interactive runtime: dependency satisfaction, argument
+accuracy, subgoal progression, and terminal quality. This ensures
+training-time rewards align with the evaluation metrics.
 
 Modeled after NeMo RL's sliding puzzle example with adaptations for
 the supply chain domain.
@@ -26,7 +33,6 @@ import torch
 from omegaconf import OmegaConf
 from torch.utils.data import IterableDataset
 
-# Add workspace to path for scenario data imports
 sys.path.insert(0, "/workspace")
 
 from nemo_rl.algorithms.grpo import MasterConfig, grpo_train, setup
@@ -42,130 +48,162 @@ from nemo_rl.utils.logger import get_next_experiment_dir
 OmegaConf.register_new_resolver("mul", lambda a, b: a * b)
 
 # ---------------------------------------------------------------------------
-# Scenario data (inline for self-containment)
+# Scenario prompts — use canonical system prompt from shared module
 # ---------------------------------------------------------------------------
 
 SCENARIO_PROMPTS = [
     (
         "Customer order SO-10482 for 1,200 units of SKU-4090 is at risk of missing "
-        "the committed delivery date of 2025-05-15. The order is currently assigned to "
+        "the committed delivery date of 2026-04-18. The order is currently assigned to "
         "DC-WEST-01. Determine whether the order can still be fulfilled on time. "
-        "If not, recommend the best mitigation action.\n\n"
-        "Available tools: get_order, get_shipment_status, get_inventory, "
-        "find_alternate_inventory, get_transfer_eta, get_supplier_expedite_options, "
-        "get_fulfillment_capacity, score_recovery_options.\n\n"
-        "Respond with a JSON tool call in this format:\n"
-        '{"tool_call": {"name": "tool_name", "arguments": {...}}}'
+        "If not, recommend the best mitigation action."
     ),
     (
         "Order SO-10483 for 800 units of SKU-3080 needs expedited fulfillment. "
         "The primary DC is DC-EAST-02 but stock is low. Check inventory and "
-        "find alternate sources.\n\n"
-        "Available tools: get_order, get_shipment_status, get_inventory, "
-        "find_alternate_inventory, get_transfer_eta, get_supplier_expedite_options, "
-        "get_fulfillment_capacity, score_recovery_options.\n\n"
-        "Respond with a JSON tool call in this format:\n"
-        '{"tool_call": {"name": "tool_name", "arguments": {...}}}'
+        "find alternate sources."
     ),
     (
         "Shipment for order SO-10484 (500 units of SKU-A100) from DC-CENTRAL-01 "
         "is delayed. Evaluate whether a transfer from another DC or a supplier "
-        "expedite would resolve the delay.\n\n"
-        "Available tools: get_order, get_shipment_status, get_inventory, "
-        "find_alternate_inventory, get_transfer_eta, get_supplier_expedite_options, "
-        "get_fulfillment_capacity, score_recovery_options.\n\n"
-        "Respond with a JSON tool call in this format:\n"
-        '{"tool_call": {"name": "tool_name", "arguments": {...}}}'
+        "expedite would resolve the delay."
     ),
     (
         "Order SO-10485 for 2,000 units of SKU-7090 is partially fulfilled. "
         "Only 1,200 units shipped from DC-WEST-01. Determine how to fulfill "
-        "the remaining 800 units.\n\n"
-        "Available tools: get_order, get_shipment_status, get_inventory, "
-        "find_alternate_inventory, get_transfer_eta, get_supplier_expedite_options, "
-        "get_fulfillment_capacity, score_recovery_options.\n\n"
-        "Respond with a JSON tool call in this format:\n"
-        '{"tool_call": {"name": "tool_name", "arguments": {...}}}'
+        "the remaining 800 units."
     ),
 ]
 
-VALID_TOOLS = {
-    "get_order", "get_shipment_status", "get_inventory",
-    "find_alternate_inventory", "get_transfer_eta",
-    "get_supplier_expedite_options", "get_fulfillment_capacity",
-    "score_recovery_options", "recommend_action",
-}
 
-SYSTEM_PROMPT = (
-    "You are a supply chain operations agent. You help resolve late order "
-    "delivery risks by analyzing orders, checking inventory, and recommending "
-    "recovery actions. Always respond with structured tool calls."
-)
+def _get_system_prompt() -> str:
+    """Load the canonical system prompt from shared.tool_schemas."""
+    from src.shared.tool_schemas import build_default_system_prompt
+    return build_default_system_prompt()
 
 
 # ---------------------------------------------------------------------------
-# Environment
+# Multi-step environment
 # ---------------------------------------------------------------------------
 
 LateOrderMetadata = dict[str, Any]
 
+MAX_STEPS = 12
 
-def score_response(content: str) -> float:
-    """Score a model response for tool-call quality.
 
-    Rewards:
-        +1.0  valid JSON with correct tool_call structure and known tool
-        +0.5  valid JSON with tool_call but unknown tool
-        +0.2  valid JSON but missing tool_call structure
-        -0.5  not valid JSON
+def _score_tool_call_sequence(message_log: list[dict[str, Any]]) -> tuple[float, bool]:
+    """Score a multi-step tool-call sequence using the repo's environment.
+
+    Replays all assistant messages through LateOrderRecoveryEnv, applying
+    the same dependency checking, subgoal tracking, and dense reward
+    computation as the interactive runtime.
+
+    Returns (total_reward, is_terminal).
     """
-    if not content:
-        return -0.5
+    from src.envs.late_order_env import LateOrderRecoveryEnv as RepoEnv
+    from src.envs.state import TOOL_DEPENDENCIES
 
-    try:
-        parsed = json.loads(content.strip())
-    except (json.JSONDecodeError, ValueError):
-        # Check for partial JSON in mixed text
-        for line in content.strip().split("\n"):
-            line = line.strip()
-            if line.startswith("{"):
-                try:
-                    parsed = json.loads(line)
-                    break
-                except (json.JSONDecodeError, ValueError):
-                    continue
-            elif line.startswith("```"):
-                continue
+    env = RepoEnv()
+    env.reset("SO-10482")
+
+    total_reward = 0.0
+    step_count = 0
+
+    for msg in message_log:
+        if msg.get("role") != "assistant":
+            continue
+        content = str(msg.get("content", ""))
+        if not content:
+            continue
+
+        parsed = _try_parse_tool_call(content)
+        if parsed is None:
+            result = env.record_invalid("malformed", "Could not parse tool call JSON")
+            step_reward = env.get_step_reward(env.get_step_count() - 1)
+            if step_reward:
+                total_reward += step_reward.total
+            step_count += 1
+            continue
+
+        if "final_answer" in parsed:
+            env.terminate("final_answer", parsed["final_answer"])
+            terminal_reward = env.get_terminal_reward()
+            if terminal_reward:
+                total_reward += terminal_reward.total
+            return total_reward, True
+
+        tool_call = parsed.get("tool_call", {})
+        tool_name = tool_call.get("name", "")
+        arguments = tool_call.get("arguments", {})
+
+        if tool_name not in TOOL_DEPENDENCIES:
+            result = env.record_invalid("unknown_tool", f"Unknown tool: {tool_name}")
+            step_reward = env.get_step_reward(env.get_step_count() - 1)
+            if step_reward:
+                total_reward += step_reward.total
+            step_count += 1
+            continue
+
+        from src.runtime.tools import TOOL_REGISTRY
+        if tool_name in TOOL_REGISTRY:
+            fn, _, _ = TOOL_REGISTRY[tool_name]
+            try:
+                tool_result = fn(**arguments)
+            except Exception:
+                tool_result = {"error": "execution_failed"}
         else:
-            return -0.5
+            tool_result = {"error": f"Tool {tool_name} not in registry"}
 
-    if not isinstance(parsed, dict):
-        return -0.5
+        env.step(tool_name, arguments, tool_result)
+        step_reward = env.get_step_reward(env.get_step_count() - 1)
+        if step_reward:
+            total_reward += step_reward.total
+        step_count += 1
 
-    tool_call = parsed.get("tool_call")
-    if tool_call is None:
-        return 0.2
+        if env.is_terminal:
+            break
 
-    if not isinstance(tool_call, dict):
-        return 0.2
+    if not env.is_terminal and step_count > 0:
+        env.terminate("max_iterations")
+        terminal_reward = env.get_terminal_reward()
+        if terminal_reward:
+            total_reward += terminal_reward.total
 
-    name = tool_call.get("name", "")
-    has_args = "arguments" in tool_call
+    summary = env.get_episode_reward_summary()
+    return summary.total_reward, env.is_terminal
 
-    if name in VALID_TOOLS and has_args:
-        return 1.0
-    elif name in VALID_TOOLS:
-        return 0.7
-    else:
-        return 0.5
+
+def _try_parse_tool_call(content: str) -> dict[str, Any] | None:
+    """Attempt to parse a tool call or final answer from model output."""
+    try:
+        return json.loads(content.strip())
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    for line in content.strip().split("\n"):
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                return json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue
+    return None
 
 
 @ray.remote
 class LateOrderRecoveryEnv(EnvironmentInterface[LateOrderMetadata]):
-    """Single-turn environment that scores tool-call quality for supply chain tasks."""
+    """Multi-step environment that scores tool-call sequences using the repo's
+    LateOrderRecoveryEnv for dependency checking, subgoal tracking, and
+    dense decomposed rewards.
+
+    Each episode runs until the model emits a final_answer, reaches MAX_STEPS,
+    or produces only invalid outputs. The environment provides intermediate
+    observations that guide the model toward the next tool call.
+    """
 
     def __init__(self, cfg: Optional[dict] = None):
         self.cfg = cfg or {}
+        self.max_steps = self.cfg.get("max_steps", MAX_STEPS)
 
     def step(
         self,
@@ -189,21 +227,38 @@ class LateOrderRecoveryEnv(EnvironmentInterface[LateOrderMetadata]):
                 all_answers.append(None)
                 continue
 
+            step_num = meta.get("step_num", 0) + 1
+
+            reward, is_done = _score_tool_call_sequence(message_log)
+
             last_content = ""
             if message_log and message_log[-1].get("role") == "assistant":
                 last_content = str(message_log[-1].get("content", ""))
 
-            reward = score_response(last_content)
+            parsed = _try_parse_tool_call(last_content) if last_content else None
+            has_final = parsed is not None and "final_answer" in parsed
+            at_limit = step_num >= self.max_steps
 
-            observations.append({
-                "role": "environment",
-                "content": f"Tool call scored. Reward: {reward:.1f}",
-            })
+            terminated = is_done or has_final or at_limit
+
+            if terminated:
+                observations.append({
+                    "role": "environment",
+                    "content": f"Episode complete after {step_num} steps. Reward: {reward:.4f}",
+                })
+                all_next_metadata.append(None)
+                all_answers.append(last_content[:200] if last_content else None)
+            else:
+                obs_text = _build_step_observation(parsed, step_num)
+                observations.append({"role": "environment", "content": obs_text})
+                next_meta = dict(meta)
+                next_meta["step_num"] = step_num
+                all_next_metadata.append(next_meta)
+                all_answers.append(None)
+
             rewards.append(reward)
-            terminateds.append(True)
+            terminateds.append(terminated)
             all_stop_strings.append(None)
-            all_next_metadata.append(None)
-            all_answers.append(last_content[:200] if last_content else None)
 
         return EnvironmentReturn(
             observations=observations,
@@ -235,18 +290,41 @@ class LateOrderRecoveryEnv(EnvironmentInterface[LateOrderMetadata]):
         }
 
 
+def _build_step_observation(parsed: dict | None, step_num: int) -> str:
+    """Build a step observation to guide the model toward the next tool."""
+    if parsed is None:
+        return (
+            f"Step {step_num}: Could not parse your response as valid JSON. "
+            f"Please respond with a JSON tool call or final answer."
+        )
+
+    tool_call = parsed.get("tool_call", {})
+    tool_name = tool_call.get("name", "unknown")
+
+    from src.envs.state import TOOL_DEPENDENCIES
+    if tool_name not in TOOL_DEPENDENCIES:
+        return (
+            f"Step {step_num}: Unknown tool '{tool_name}'. "
+            f"Available tools: {', '.join(sorted(TOOL_DEPENDENCIES.keys()))}. "
+            f"Please call a valid tool."
+        )
+
+    return f"Step {step_num}: Tool '{tool_name}' executed. Continue with the next step."
+
+
 # ---------------------------------------------------------------------------
 # Dataset
 # ---------------------------------------------------------------------------
 
 class LateOrderDataset(IterableDataset):
-    """Generates supply chain prompts indefinitely for GRPO training."""
+    """Generates supply chain prompts with canonical system prompt for GRPO training."""
 
     def __init__(self, tokenizer, length: int, add_system_prompt: bool = True):
         super().__init__()
         self.tokenizer = tokenizer
         self.length = length
         self.add_system_prompt = add_system_prompt
+        self._system_prompt = _get_system_prompt()
 
     def __iter__(self) -> Iterator[DatumSpec]:
         for i in itertools.count():
@@ -254,7 +332,7 @@ class LateOrderDataset(IterableDataset):
 
             messages = []
             if self.add_system_prompt:
-                messages.append({"role": "system", "content": SYSTEM_PROMPT})
+                messages.append({"role": "system", "content": self._system_prompt})
             messages.append({"role": "user", "content": prompt_text})
 
             prompt_content = self.tokenizer.apply_chat_template(
@@ -277,6 +355,7 @@ class LateOrderDataset(IterableDataset):
             metadata: LateOrderMetadata = {
                 "prompt_idx": i % len(SCENARIO_PROMPTS),
                 "task_name": "late_order_recovery",
+                "step_num": 0,
             }
 
             datum: DatumSpec = {

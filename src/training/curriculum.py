@@ -1,5 +1,5 @@
 """
-Training curriculum staging for multi-turn RL on tool-calling agents.
+Training curriculum staging for multi-step RL on tool-calling agents.
 
 Defines the staged training progression that later phases will implement:
 
@@ -10,7 +10,7 @@ Defines the staged training progression that later phases will implement:
               RL over 1-3 tool-call episodes with step-level reward signals
               for tool validity, argument accuracy, and dependency satisfaction.
 
-    Stage 3 — Full multi-turn RL with sequence-aware rewards
+    Stage 3 — Full multi-step RL with sequence-aware rewards
               RL over complete episodes (5-10 tool calls) with rewards that
               cover the full decision process: diagnosis, assessment,
               alternate recovery, and recommendation synthesis.
@@ -42,7 +42,7 @@ class TrainingStage(Enum):
     """The four curriculum stages, in order."""
     SFT_SUCCESSFUL = "sft_successful"
     SHORT_HORIZON_RL = "short_horizon_rl"
-    FULL_MULTITURN_RL = "full_multiturn_rl"
+    FULL_MULTISTEP_RL = "full_multistep_rl"
     ROBUSTNESS = "robustness"
 
 
@@ -104,7 +104,7 @@ DEFAULT_CURRICULUM: list[StageConfig] = [
             "Short-horizon RL with dense per-step rewards. "
             "Episodes are truncated to 1-3 tool calls so the model "
             "learns individual tool selection and argument extraction "
-            "before tackling full multi-turn sequences."
+            "before tackling full multi-step sequences."
         ),
         episode_filter={
             "is_complete": True,
@@ -127,9 +127,9 @@ DEFAULT_CURRICULUM: list[StageConfig] = [
         entry_condition="After SFT checkpoint shows stable tool-call formatting.",
     ),
     StageConfig(
-        stage=TrainingStage.FULL_MULTITURN_RL,
+        stage=TrainingStage.FULL_MULTISTEP_RL,
         description=(
-            "Full multi-turn RL with sequence-aware rewards. "
+            "Full multi-step RL with sequence-aware rewards. "
             "Episodes span the complete decision process (5-10 tool calls): "
             "diagnosis, primary assessment, alternate recovery, and "
             "recommendation synthesis."
@@ -183,7 +183,7 @@ DEFAULT_CURRICULUM: list[StageConfig] = [
         step_reward_weight=0.5,
         trajectory_reward_weight=0.5,
         entry_condition=(
-            "After full multi-turn RL shows stable task completion. "
+            "After full multi-step RL shows stable task completion. "
             "This stage hardens the policy against adversarial inputs."
         ),
     ),

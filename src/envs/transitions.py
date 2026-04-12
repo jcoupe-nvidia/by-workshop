@@ -34,7 +34,6 @@ from src.envs.state import (
     TOOL_TO_SUBGOAL,
 )
 from src.envs.state import TOOL_DEPENDENCIES
-from src.runtime.tools import TOOL_REGISTRY
 
 
 # -- Transition result --------------------------------------------------------
@@ -79,7 +78,7 @@ def check_preconditions(
         return False, "terminal", "Episode is already terminal."
 
     # Known tool?
-    if tool_name not in TOOL_REGISTRY:
+    if tool_name not in TOOL_DEPENDENCIES:
         return False, "unknown_tool", f"Unknown tool: '{tool_name}'."
 
     # Dependency check

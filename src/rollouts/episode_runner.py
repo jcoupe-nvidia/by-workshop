@@ -190,7 +190,7 @@ def enrich_episode(
                     was_repaired=pending_tool_call.was_repaired,
                 )
                 # Get the reward for this step (last one added)
-                step_idx = len(env._step_rewards) - 1
+                step_idx = env.get_step_count() - 1
                 reward = env.get_step_reward(step_idx)
                 if reward is not None:
                     # Attach reward to the TOOL_CALL event
@@ -205,7 +205,7 @@ def enrich_episode(
                     error_message=payload.message,
                 )
                 # Get the penalty reward
-                step_idx = len(env._step_rewards) - 1
+                step_idx = env.get_step_count() - 1
                 reward = env.get_step_reward(step_idx)
                 if reward is not None:
                     event.reward = reward.total

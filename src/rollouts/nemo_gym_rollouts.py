@@ -4,16 +4,14 @@ NeMo Gym rollout collection adapter.
 Bridges the rollout layer with NeMo Gym's training-time infrastructure:
 
     - Training-time execution pipeline (validate → repair → reject → execute → record)
-    - Converts enriched Episodes to NemoGymResultRows for reward profiling
+    - Converts enriched Episodes to NemoGymResultRows
     - Builds RolloutCollectionConfig for NeMo Gym rollout collection runs
-    - Runs reward profiling on collected rollouts via RewardProfiler
     - Durable trajectory export from NeMo Gym sessions
 
 Owns:
     - Training-time agent-action execution pipeline
     - Enriched episode -> NeMo Gym result row conversion (via envs.nemo_gym_adapter)
     - RolloutCollectionConfig construction for the late-order-recovery task
-    - RewardProfiler integration for post-collection metrics
     - Session episode persistence through canonical serializers
 
 Does NOT own:
@@ -26,18 +24,12 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 from nemo_gym.rollout_collection import (
     RolloutCollectionConfig,
     RolloutCollectionHelper,
 )
-try:
-    from nemo_gym.reward_profile import RewardProfiler
-except ImportError:
-    RewardProfiler = None  # type: ignore[assignment,misc]
-
 from src.envs.nemo_gym_adapter import (
     NemoGymResultRow,
     build_rollout_input_row,
@@ -57,14 +49,11 @@ from src.rollouts.trace_types import Episode, EventType, ToolCallPayload
 # resource server in envs/ delegates here so that envs/ stays focused on
 # environment validation surfaces while rollouts/ owns execution plumbing.
 #
-# NOTE: This pipeline re-uses validate_tool_call, try_repair, and
-# FallbackAction from src.runtime.* but orchestrates them with real-time
-# environment interaction (env.step, env.record_invalid, etc.) which the
-# runtime's interactive agent loop does not do. The interactive runtime
-# attaches rewards post-hoc via episode_runner.enrich_episode(). If the
-# core validate → repair → reject logic changes in runtime, this pipeline
-# must be updated to match. A shared runtime-owned helper is a future
-# option but deferred to avoid premature abstraction in a pedagogical repo.
+# NOTE: This pipeline delegates the core validate → repair → reject logic to
+# the shared helper in src.runtime.execution.validate_and_repair(), ensuring
+# identical validation semantics between interactive and training-time paths.
+# The training-time pipeline adds environment interaction (env.step,
+# env.record_invalid, etc.) around the shared validation core.
 
 
 @dataclass
@@ -125,74 +114,58 @@ def _process_function_call(
     repair_fn: Any,
     fallback_action_cls: Any,
 ) -> float:
-    """Execute the validate → repair → reject → execute → record loop."""
-    reward = 0.0
-    tool_name = action.tool_name
-    arguments = action.arguments
+    """Execute the validate → repair → reject → execute → record loop.
 
+    Uses the shared validate_and_repair() pipeline from runtime.execution
+    to ensure identical validation semantics between interactive and
+    training-time execution paths.
+    """
+    from src.runtime.execution import validate_and_repair
+
+    reward = 0.0
     raw_output = json.dumps({
         "tool_call": {
-            "name": tool_name,
-            "arguments": arguments,
+            "name": action.tool_name,
+            "arguments": action.arguments,
         }
     })
 
-    # Run the canonical validate → repair → reject loop
-    result = validate_fn(raw_output, tool_registry)
-    was_repaired = False
+    vr = validate_and_repair(raw_output, tool_registry, recorder=recorder)
 
-    if hasattr(result, "error_type"):
-        # Validation failed — attempt repair
-        fb = repair_fn(raw_output, tool_registry)
-        if fb.action == fallback_action_cls.REPAIRED and fb.repaired:
-            recorder.record_repair_attempt(
-                original_output=raw_output,
-                repaired_output=fb.repaired,
-                repairs_applied=fb.repairs_applied,
-                succeeded=True,
-            )
-            env.record_fallback_repair(succeeded=True)
-            result = validate_fn(fb.repaired, tool_registry)
-            was_repaired = True
-        elif fb.action == fallback_action_cls.REJECTED:
-            recorder.record_repair_attempt(
-                original_output=raw_output,
-                repaired_output=None,
-                repairs_applied=fb.repairs_applied,
-                succeeded=False,
-            )
-            recorder.record_reject(
-                reason=fb.rejection_reason or "Unrecoverable output",
-                raw_model_output=raw_output,
-                repairs_attempted=fb.repairs_applied,
-            )
-            env.record_fallback_repair(succeeded=False)
-            env.record_fallback_reject()
-            step = env.record_invalid(
-                "rejected",
-                fb.rejection_reason or "Unrecoverable output",
-            )
-            step_idx = len(env._step_rewards) - 1
-            step_reward = env.get_step_reward(step_idx)
-            if step_reward:
-                reward += step_reward.total
-            return reward
+    # Handle rejection
+    if (vr.fallback_result is not None
+            and vr.fallback_result.action == fallback_action_cls.REJECTED):
+        env.record_fallback_repair(succeeded=False)
+        env.record_fallback_reject()
+        env.record_invalid(
+            "rejected",
+            vr.fallback_result.rejection_reason or "Unrecoverable output",
+        )
+        step_idx = env.get_step_count() - 1
+        step_reward = env.get_step_reward(step_idx)
+        if step_reward:
+            reward += step_reward.total
+        return reward
 
-    # If still invalid after repair, record and return
-    if hasattr(result, "error_type"):
+    if vr.was_repaired:
+        env.record_fallback_repair(succeeded=True)
+
+    # Still invalid after repair attempt
+    if vr.validation_error is not None:
         recorder.record_validation_error(
-            error_type=result.error_type,
-            message=result.message,
+            error_type=vr.validation_error.error_type,
+            message=vr.validation_error.message,
             raw_model_output=raw_output,
         )
-        step = env.record_invalid(result.error_type, result.message)
-        step_idx = len(env._step_rewards) - 1
+        env.record_invalid(vr.validation_error.error_type, vr.validation_error.message)
+        step_idx = env.get_step_count() - 1
         step_reward = env.get_step_reward(step_idx)
         if step_reward:
             reward += step_reward.total
         return reward
 
     # Valid tool call — record, execute, and step
+    result = vr.parsed
     valid_name = result.tool_name
     valid_args = result.arguments
     recorder.record_tool_call(
@@ -210,8 +183,8 @@ def _process_function_call(
         except Exception:
             tool_result = {"error": "execution_failed"}
         recorder.record_tool_result(valid_name, tool_result)
-        env.step(valid_name, valid_args, tool_result, was_repaired=was_repaired)
-        step_idx = len(env._step_rewards) - 1
+        env.step(valid_name, valid_args, tool_result, was_repaired=vr.was_repaired)
+        step_idx = env.get_step_count() - 1
         step_reward = env.get_step_reward(step_idx)
         if step_reward:
             reward += step_reward.total
@@ -281,8 +254,8 @@ def _attach_event_rewards(episode: Episode, env: Any) -> None:
     Mutates episode.events in place.
     """
     step_idx = 0
-    step_rewards = env._step_rewards
-    terminal_reward = env._terminal_reward
+    step_rewards = env.get_all_step_rewards()
+    terminal_reward = env.get_terminal_reward()
 
     for event in episode.events:
         if event.event_type == EventType.TOOL_CALL:
@@ -942,39 +915,6 @@ def prepare_rollout_inputs(
     ]
     save_nemo_gym_inputs_jsonl(rows, output_path)
     return output_path
-
-
-def profile_rollout_rewards(
-    input_rows: list[dict[str, Any]],
-    result_rows: list[NemoGymResultRow],
-    output_dir: str | None = None,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Run NeMo Gym RewardProfiler on collected rollout results.
-
-    Computes group-level and agent-level reward statistics across
-    the collected rollout batch.
-
-    Args:
-        input_rows: The original task input rows (list of dicts).
-        result_rows: Collected result rows (NemoGymResultRow objects).
-        output_dir: If provided, writes profiling results to disk.
-
-    Returns:
-        Tuple of (group_level_metrics, agent_level_metrics).
-    """
-    profiler = RewardProfiler()
-
-    result_dicts = [row.to_dict() for row in result_rows]
-    group_metrics, agent_metrics = profiler.profile_from_data(
-        rows=input_rows,
-        results=result_dicts,
-    )
-
-    if output_dir is not None:
-        base_path = Path(output_dir)
-        profiler.write_to_disk(group_metrics, agent_metrics, base_path)
-
-    return group_metrics, agent_metrics
 
 
 def save_enriched_as_nemo_gym(

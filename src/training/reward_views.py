@@ -50,8 +50,8 @@ SHORT_HORIZON_REWARD_WEIGHTS: dict[str, float] = {
     "terminal_quality":     0.00,
 }
 
-# Full multi-turn RL balances step and trajectory signals
-FULL_MULTITURN_REWARD_WEIGHTS: dict[str, float] = {
+# Full multi-step RL balances step and trajectory signals
+FULL_MULTISTEP_REWARD_WEIGHTS: dict[str, float] = {
     "valid_call":           0.15,
     "correct_tool":         0.15,
     "correct_arguments":    0.10,
@@ -78,7 +78,7 @@ ROBUSTNESS_REWARD_WEIGHTS: dict[str, float] = {
 STAGE_REWARD_WEIGHTS: dict[TrainingStage, dict[str, float]] = {
     TrainingStage.SFT_SUCCESSFUL: SFT_REWARD_WEIGHTS,
     TrainingStage.SHORT_HORIZON_RL: SHORT_HORIZON_REWARD_WEIGHTS,
-    TrainingStage.FULL_MULTITURN_RL: FULL_MULTITURN_REWARD_WEIGHTS,
+    TrainingStage.FULL_MULTISTEP_RL: FULL_MULTISTEP_REWARD_WEIGHTS,
     TrainingStage.ROBUSTNESS: ROBUSTNESS_REWARD_WEIGHTS,
 }
 

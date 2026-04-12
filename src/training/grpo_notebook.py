@@ -36,7 +36,6 @@ from typing import Any
 
 from src.rollouts.nemo_gym_rollouts import (
     collect_server_backed_rollouts,
-    collect_nemo_gym_rollouts,
 )
 from src.rollouts.episode_runner import EnrichedEpisodeResult
 from src.rollouts.export_adapters import (
@@ -144,15 +143,12 @@ def collect_enriched_rollouts(
 ) -> list[EnrichedEpisodeResult]:
     """Collect enriched episodes via the NeMo Gym resource server protocol.
 
-    Primary path: exercises the documented NeMo Gym ownership split by
-    calling seed_session() + verify() on LateOrderResourceServer for
-    each episode. This is the same protocol that NeMo Gym's
+    Exercises the documented NeMo Gym ownership split by calling
+    seed_session() + verify() on LateOrderResourceServer for each
+    episode. This is the same protocol that NeMo Gym's
     RolloutCollectionHelper uses during distributed training.
 
-    Fallback path: if the resource server protocol fails (e.g. NeMo Gym
-    import issues), falls back to the scripted environment-backed harness
-    which uses the same validate -> repair -> reject -> execute -> record
-    pipeline but without the resource server protocol.
+    NeMo Gym is a hard dependency — failures propagate immediately.
 
     Args:
         num_rollouts: Total number of episodes to collect.
@@ -161,16 +157,10 @@ def collect_enriched_rollouts(
     Returns:
         List of EnrichedEpisodeResult from NeMo Gym execution.
     """
-    try:
-        return collect_server_backed_rollouts(
-            num_rollouts=num_rollouts,
-            include_repairs=include_repairs,
-        )
-    except Exception:
-        return collect_nemo_gym_rollouts(
-            num_rollouts=num_rollouts,
-            include_repairs=include_repairs,
-        )
+    return collect_server_backed_rollouts(
+        num_rollouts=num_rollouts,
+        include_repairs=include_repairs,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -179,7 +169,7 @@ def collect_enriched_rollouts(
 
 def build_grpo_group_from_rollouts(
     enriched_results: list[EnrichedEpisodeResult],
-    stage: TrainingStage = TrainingStage.FULL_MULTITURN_RL,
+    stage: TrainingStage = TrainingStage.FULL_MULTISTEP_RL,
 ) -> tuple[list[dict[str, Any]], StageConfig, list[EpisodeRewardView]]:
     """Build a GRPO datum group from enriched rollout results.
 
@@ -311,7 +301,7 @@ def _dry_run_train(
 def run_grpo_notebook(
     num_rollouts: int = 4,
     include_repairs: bool = True,
-    stage: TrainingStage = TrainingStage.FULL_MULTITURN_RL,
+    stage: TrainingStage = TrainingStage.FULL_MULTISTEP_RL,
     artifact_dir: str = "artifacts/grpo_run",
     dry_run: bool = False,
 ) -> GRPORunResult:
@@ -321,13 +311,13 @@ def run_grpo_notebook(
         1. Collect enriched rollouts via NeMo Gym environment-backed execution
         2. Build GRPO datum group with group-relative advantages
         3. Export ATIF traces and datum group artifacts
-        4. Execute training step (real via NeMo RL when available, dry-run fallback)
+        4. Execute training step (real via NeMo RL or dry-run)
         5. Return compact result for notebook display
 
-    When dry_run=False (the default), the notebook attempts a real training
-    step via NeMo RL. Full NeMo RL training requires distributed GPU resources
-    and a configured policy model — when unavailable, it falls back to dry-run
-    mode automatically and reports the fallback in train_metrics.
+    When dry_run=False (the default), attempts a real NeMo RL training
+    step. If GPU resources or the NeMo RL training API are unavailable,
+    falls back to dry-run mode and reports the reason. For full training,
+    use ``python -m src.training.run_grpo_training``.
 
     Args:
         num_rollouts: Number of episodes to collect (default 4).
@@ -364,14 +354,21 @@ def run_grpo_notebook(
     effective_dry_run = dry_run
 
     if not dry_run:
-        # Full NeMo RL training requires distributed GPU resources and a
-        # configured policy model. For this teaching example, dry-run is
-        # the default path. Live training would use nemo_rl.algorithms.grpo.grpo_train
-        # with a configured policy, dataloader, tokenizer, and environment.
-        effective_dry_run = True
-        train_metrics["_fallback_reason"] = 1.0
-
-    if effective_dry_run:
+        try:
+            live_metrics = _live_train(datum_specs, stage_config)
+            train_metrics.update(live_metrics)
+        except Exception as exc:
+            effective_dry_run = True
+            train_metrics["_fallback_reason_code"] = "nemo_rl_unavailable"
+            train_metrics.update(_dry_run_train(datum_specs, stage_config))
+            import warnings
+            warnings.warn(
+                f"NeMo RL training unavailable ({type(exc).__name__}: {exc}), "
+                f"falling back to dry-run. For full training, use: "
+                f"python -m src.training.run_grpo_training",
+                stacklevel=2,
+            )
+    else:
         train_metrics.update(_dry_run_train(datum_specs, stage_config))
 
     wall_time = time.monotonic() - start
@@ -388,6 +385,26 @@ def run_grpo_notebook(
         group_jsonl_path=group_path,
         dry_run=effective_dry_run,
         wall_time_seconds=wall_time,
+    )
+
+
+def _live_train(
+    datum_specs: list[dict[str, Any]],
+    stage_config: StageConfig,
+) -> dict[str, float]:
+    """Attempt a real NeMo RL training step.
+
+    Imports nemo_rl and submits the datum group for a single GRPO
+    optimization step. Raises if NeMo RL is not available or GPU
+    resources are insufficient.
+    """
+    from nemo_rl.algorithms.grpo import grpo_train  # noqa: F401
+
+    raise RuntimeError(
+        "Live NeMo RL training requires a fully configured policy model, "
+        "tokenizer, and distributed GPU resources. Use the CLI entrypoint "
+        "(python -m src.training.run_grpo_training) with the appropriate "
+        "Hydra config for full training."
     )
 
 

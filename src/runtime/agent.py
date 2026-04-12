@@ -52,6 +52,7 @@ from src.runtime.fallbacks import (
     try_repair,
     parse_with_fallback,
 )
+from src.runtime.execution import validate_and_repair
 from src.runtime.prompts import build_system_prompt, build_task_message
 from src.runtime.tracing import EpisodeRecorder
 from src.envs.validators import check_dependencies
@@ -447,40 +448,15 @@ def run_agent_episode(
             display = raw_response[:200] + ("..." if len(raw_response) > 200 else "")
             print(f"  Model: {display}")
 
-        # Step 2: Parse and validate the response
-        result = validate_tool_call(raw_response, TOOL_REGISTRY)
-        fallback_result: FallbackResult | None = None
+        # Step 2: Validate → repair → reject via shared pipeline
+        vr = validate_and_repair(raw_response, TOOL_REGISTRY, recorder=recorder)
 
-        # Step 2b: If validation fails, attempt fallback repair
-        if isinstance(result, ValidationError):
-            fb = try_repair(raw_response, TOOL_REGISTRY)
+        if vr.was_repaired and verbose:
+            print(f"  -> Fallback REPAIRED: {vr.fallback_result.repairs_applied}")
+        if vr.fallback_result and vr.fallback_result.action == FallbackAction.REJECTED and verbose:
+            print(f"  -> Fallback REJECTED: {vr.fallback_result.rejection_reason}")
 
-            if fb.action == FallbackAction.REPAIRED and fb.repaired:
-                recorder.record_repair_attempt(
-                    original_output=raw_response,
-                    repaired_output=fb.repaired,
-                    repairs_applied=fb.repairs_applied,
-                    succeeded=True,
-                )
-                result = validate_tool_call(fb.repaired, TOOL_REGISTRY)
-                fallback_result = fb
-                if verbose:
-                    print(f"  -> Fallback REPAIRED: {fb.repairs_applied}")
-            elif fb.action == FallbackAction.REJECTED:
-                recorder.record_repair_attempt(
-                    original_output=raw_response,
-                    repaired_output=None,
-                    repairs_applied=fb.repairs_applied,
-                    succeeded=False,
-                )
-                recorder.record_reject(
-                    reason=fb.rejection_reason or "Unknown rejection",
-                    raw_model_output=raw_response,
-                    repairs_attempted=fb.repairs_applied,
-                )
-                fallback_result = fb
-                if verbose:
-                    print(f"  -> Fallback REJECTED: {fb.rejection_reason}")
+        result = vr.parsed
 
         # Step 3a: Final answer -- stop the loop
         if isinstance(result, ParsedFinalAnswer):
@@ -493,10 +469,10 @@ def run_agent_episode(
             break
 
         # Step 3b: Validation error (after fallback attempt)
-        if isinstance(result, ValidationError):
+        if vr.validation_error is not None:
             recorder.record_validation_error(
-                error_type=result.error_type,
-                message=result.message,
+                error_type=vr.validation_error.error_type,
+                message=vr.validation_error.message,
                 raw_model_output=raw_response,
             )
 
@@ -504,13 +480,13 @@ def run_agent_episode(
             messages.append({
                 "role": "user",
                 "content": (
-                    f"Error: {result.message} "
+                    f"Error: {vr.validation_error.message} "
                     f"Please respond with a valid JSON tool call or final answer."
                 ),
             })
 
             if verbose:
-                print(f"  -> Validation error: {result.error_type}: {result.message}")
+                print(f"  -> Validation error: {vr.validation_error.error_type}: {vr.validation_error.message}")
             continue
 
         # Step 3c: Valid tool call -- check dependencies
@@ -707,39 +683,15 @@ def run_agent_episode_nat(
             display = raw_response[:200] + ("..." if len(raw_response) > 200 else "")
             print(f"  Model: {display}")
 
-        # Step 2: Parse and validate (same as run_agent_episode)
-        result = validate_tool_call(raw_response, TOOL_REGISTRY)
-        fallback_result: FallbackResult | None = None
+        # Step 2: Validate → repair → reject via shared pipeline
+        vr = validate_and_repair(raw_response, TOOL_REGISTRY, recorder=recorder)
 
-        if isinstance(result, ValidationError):
-            fb = try_repair(raw_response, TOOL_REGISTRY)
+        if vr.was_repaired and verbose:
+            print(f"  -> Fallback REPAIRED: {vr.fallback_result.repairs_applied}")
+        if vr.fallback_result and vr.fallback_result.action == FallbackAction.REJECTED and verbose:
+            print(f"  -> Fallback REJECTED: {vr.fallback_result.rejection_reason}")
 
-            if fb.action == FallbackAction.REPAIRED and fb.repaired:
-                recorder.record_repair_attempt(
-                    original_output=raw_response,
-                    repaired_output=fb.repaired,
-                    repairs_applied=fb.repairs_applied,
-                    succeeded=True,
-                )
-                result = validate_tool_call(fb.repaired, TOOL_REGISTRY)
-                fallback_result = fb
-                if verbose:
-                    print(f"  -> Fallback REPAIRED: {fb.repairs_applied}")
-            elif fb.action == FallbackAction.REJECTED:
-                recorder.record_repair_attempt(
-                    original_output=raw_response,
-                    repaired_output=None,
-                    repairs_applied=fb.repairs_applied,
-                    succeeded=False,
-                )
-                recorder.record_reject(
-                    reason=fb.rejection_reason or "Unknown rejection",
-                    raw_model_output=raw_response,
-                    repairs_attempted=fb.repairs_applied,
-                )
-                fallback_result = fb
-                if verbose:
-                    print(f"  -> Fallback REJECTED: {fb.rejection_reason}")
+        result = vr.parsed
 
         # Step 3a: Final answer
         if isinstance(result, ParsedFinalAnswer):
@@ -752,22 +704,22 @@ def run_agent_episode_nat(
             break
 
         # Step 3b: Validation error
-        if isinstance(result, ValidationError):
+        if vr.validation_error is not None:
             recorder.record_validation_error(
-                error_type=result.error_type,
-                message=result.message,
+                error_type=vr.validation_error.error_type,
+                message=vr.validation_error.message,
                 raw_model_output=raw_response,
             )
             messages.append({"role": "assistant", "content": raw_response})
             messages.append({
                 "role": "user",
                 "content": (
-                    f"Error: {result.message} "
+                    f"Error: {vr.validation_error.message} "
                     f"Please respond with a valid JSON tool call or final answer."
                 ),
             })
             if verbose:
-                print(f"  -> Validation error: {result.error_type}: {result.message}")
+                print(f"  -> Validation error: {vr.validation_error.error_type}: {vr.validation_error.message}")
             continue
 
         # Step 3c: Valid tool call -- check dependencies

@@ -23,7 +23,7 @@ The workshop materials are aligned to the package versions observed in the refer
 | shared contracts | None; repo-owned | Canonical task contracts, datum schemas, trace and event schemas, sequence rules, deterministic business-tool semantics, and offline evaluation logic shared across all integrations. |
 | `runtime/` | `NeMo Agent Toolkit (NAT)` | Interactive agent runtime, tool registration, structured tool calls, skill discovery, skill loading, prompt/runtime policy, and single-episode execution surfaces. |
 | `envs/` | `NeMo Gym` | Environment-backed task execution, task-state transitions, action and tool-precondition verification, session-scoped external state, and task verification / reward-producing environment logic over repo-defined task contracts. |
-| `rollouts/` | `NeMo Gym` | Multi-turn rollout orchestration and collection, environment-backed tool execution, and rollout lifecycle management, with the repo preserving canonical trace formats, explicit failure and repair events, and adapters. |
+| `rollouts/` | `NeMo Gym` | Multi-step rollout orchestration and collection, environment-backed tool execution, and rollout lifecycle management, with the repo preserving canonical trace formats, explicit failure and repair events, and adapters. |
 | `training/` | `NeMo RL` | Trainer-facing dataset construction from canonical data and traces, GRPO-aligned task routing, reward views and targets, masking and weighting, curriculum staging, and experiment handoff defining what gets optimized. |
 | `eval/` | None; repo-owned | Offline metrics, regression summaries, and sequence-sensitive scoring over canonical traces and artifacts from the rest of the stack. |
 
@@ -73,7 +73,7 @@ Do not use it as the source of truth for task semantics, trace contracts, or rew
 
 Use it for:
 
-- agent-server orchestration of multi-step and multi-turn rollouts
+- agent-server orchestration of multi-step rollouts
 - routing model outputs and tool calls during training-time execution
 - resources-server task execution and per-rollout session state
 - task verification and reward-returning environment logic

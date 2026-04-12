@@ -7,5 +7,5 @@ Modules:
     export_adapters     -- Episode -> training trajectory + ATIF trajectory formats
     scripted_traces     -- pre-built scripted episodes for workshop demonstration
     nemo_gym_rollouts   -- NeMo Gym rollout collection adapter (RolloutCollectionConfig,
-                           RewardProfiler integration, enriched -> result row export)
+                           enriched -> result row export)
 """

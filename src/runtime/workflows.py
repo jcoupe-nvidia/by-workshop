@@ -145,7 +145,7 @@ def _call_tool(ctx: WorkflowContext, workflow_name: str, tool_name: str, **kwarg
     return result
 
 
-# -- Workflow registry (derived from directory-backed skills) -----------------
+# -- Workflow registry (derived from directory-backed skills + optional YAML) -
 
 from src.runtime.skills.api import (
     build_skill_order,
@@ -154,13 +154,49 @@ from src.runtime.skills.api import (
     list_skills,
 )
 
-# Derive registries from SKILL.md frontmatter rather than hardcoding them.
-# This makes the skills directory the single source of truth for workflow
-# names, tool patterns, transitions, and ordering.
-WORKFLOW_ORDER = build_skill_order()
+
+def _try_load_workflow_yaml() -> dict | None:
+    """Attempt to load declarative workflow config from workflow_config.yaml.
+
+    Returns parsed YAML dict or None if the file is missing. This
+    demonstrates NAT best practice #4: declarative YAML configuration
+    for workflows, models, middleware, and runtime variants.
+    """
+    import os
+    yaml_path = os.path.join(os.path.dirname(__file__), "workflow_config.yaml")
+    if not os.path.exists(yaml_path):
+        return None
+    try:
+        import yaml
+        with open(yaml_path) as f:
+            return yaml.safe_load(f)
+    except Exception:
+        return None
+
+
+def _build_registries_from_yaml(cfg: dict) -> tuple[list[str], dict, dict]:
+    """Derive workflow registries from YAML config."""
+    order = cfg.get("ordering", [])
+    tool_patterns = {}
+    transitions = {}
+    for wf in cfg.get("workflows", []):
+        tool_patterns[wf["name"]] = set(wf.get("tools", []))
+    for wf_name, targets in cfg.get("transitions", {}).items():
+        transitions[wf_name] = set(targets) if targets else set()
+    return order, tool_patterns, transitions
+
+
+_yaml_cfg = _try_load_workflow_yaml()
+if _yaml_cfg is not None:
+    WORKFLOW_ORDER, WORKFLOW_TOOL_PATTERNS, WORKFLOW_TRANSITIONS = (
+        _build_registries_from_yaml(_yaml_cfg)
+    )
+else:
+    WORKFLOW_ORDER = build_skill_order()
+    WORKFLOW_TOOL_PATTERNS = build_skill_tool_patterns()
+    WORKFLOW_TRANSITIONS = build_skill_transitions()
+
 WORKFLOW_NAMES = WORKFLOW_ORDER
-WORKFLOW_TOOL_PATTERNS = build_skill_tool_patterns()
-WORKFLOW_TRANSITIONS = build_skill_transitions()
 
 # Backward-compatible aliases for code that still uses "skill" naming
 SKILL_NAMES = WORKFLOW_NAMES

@@ -2,11 +2,11 @@
 
 MVP workshop repo for agentic supply-chain workflows on the NVIDIA stack.
 
-This repository is a teaching example, not a production system. It is designed to show a single rich, inspectable example of multi-turn agent execution, deterministic tool use, fallback handling, and sequence-sensitive evaluation.
+This repository is a teaching example, not a production system. It is designed to show a single rich, inspectable example of multi-step agent execution, deterministic tool use, fallback handling, and sequence-sensitive evaluation.
 
 ## What This Repo Demonstrates
 
-- Multi-turn agent execution against a local OpenAI-compatible model endpoint
+- Multi-step agent execution against a local OpenAI-compatible model endpoint
 - Explicit higher-level skills composed from deterministic business tools
 - Nemotron-style structured tool calling with validation, repair, and reject paths
 - Machine-checkable dependency ordering where sequence correctness matters

@@ -1,0 +1,64 @@
+# NAT workflow configuration for the late-order recovery scenario.
+#
+# Declares the four canonical workflows, their allowed tool patterns,
+# and valid transitions. Loaded by workflows.py to demonstrate the
+# declarative NAT configuration pattern (NAT best practice #4).
+
+workflows:
+  - name: diagnose_order_risk
+    description: Understand the current state of the order and shipment.
+    tools:
+      - get_order
+      - get_shipment_status
+    tags:
+      - diagnosis
+      - entry
+
+  - name: assess_primary_fulfillment
+    description: Check whether the original source DC can still fulfill.
+    tools:
+      - get_inventory
+      - get_fulfillment_capacity
+    tags:
+      - assessment
+      - inventory
+
+  - name: evaluate_alternate_recovery_paths
+    description: Explore alternate DCs, supplier expedite, and substitutes.
+    tools:
+      - find_alternate_inventory
+      - get_transfer_eta
+      - get_supplier_expedite_options
+    tags:
+      - recovery
+      - alternatives
+
+  - name: synthesize_recommendation
+    description: Score all candidate options and produce a final recommendation.
+    tools:
+      - score_recovery_options
+      - recommend_action
+    tags:
+      - recommendation
+      - terminal
+
+ordering:
+  - diagnose_order_risk
+  - assess_primary_fulfillment
+  - evaluate_alternate_recovery_paths
+  - synthesize_recommendation
+
+transitions:
+  diagnose_order_risk:
+    - assess_primary_fulfillment
+  assess_primary_fulfillment:
+    - evaluate_alternate_recovery_paths
+  evaluate_alternate_recovery_paths:
+    - synthesize_recommendation
+  synthesize_recommendation: []
+
+model:
+  endpoint: ${NEMOTRON_ENDPOINT:-http://0.0.0.0:8000/v1/chat/completions}
+  model_name: ${NEMOTRON_MODEL:-nvidia/nemotron-3-nano}
+  max_tokens: 1024
+  temperature: 0.1

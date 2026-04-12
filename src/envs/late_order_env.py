@@ -68,7 +68,6 @@ from src.envs.rewards import (
     CORRECT_TOOLS_BY_SUBGOAL,
 )
 from src.envs.state import TOOL_DEPENDENCIES
-from src.runtime.tools import TOOL_REGISTRY
 
 
 class LateOrderRecoveryEnv:
@@ -203,6 +202,14 @@ class LateOrderRecoveryEnv:
             return self._step_rewards[step_index]
         return None
 
+    def get_step_count(self) -> int:
+        """Return the number of reward-producing steps recorded so far."""
+        return len(self._step_rewards)
+
+    def get_all_step_rewards(self) -> list[RewardSignal]:
+        """Return all step reward signals recorded so far."""
+        return list(self._step_rewards)
+
     def get_terminal_reward(self) -> RewardSignal | None:
         """Get the terminal step reward signal."""
         return self._terminal_reward
@@ -228,7 +235,7 @@ class LateOrderRecoveryEnv:
     def get_allowed_tools(self) -> list[str]:
         """Return the list of tools that can be called right now."""
         allowed = []
-        for tool_name in TOOL_REGISTRY:
+        for tool_name in TOOL_DEPENDENCIES:
             ok, _, _ = check_preconditions(self.state, tool_name)
             if ok:
                 allowed.append(tool_name)

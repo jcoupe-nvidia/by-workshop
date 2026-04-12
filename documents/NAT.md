@@ -39,7 +39,7 @@ These practices are tailored to this repo’s current shape: a NAT-backed `runti
 - This fits the repo’s existing emphasis on sequence correctness, tool validity, and recovery quality. :contentReference[oaicite:8]{index=8}
 
 ## 9. Unit test tools in isolation
-- Use `nat.test.ToolTestRunner` for deterministic tool tests without spinning up the full workflow stack.
+- Test deterministic tools via direct function calls against the `TOOL_REGISTRY` without spinning up the full workflow stack (see `tests/test_nat_tool_runner.py`).
 - This is especially important here because the repo’s business tools are deterministic and are the foundation for higher-level skill quality. :contentReference[oaicite:9]{index=9}
 
 ## 10. Profile runtime behavior before optimizing prompts or models

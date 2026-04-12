@@ -88,7 +88,7 @@ class TestBuildGrpoGroupFromRollouts:
         datum_specs, _, _ = build_grpo_group_from_rollouts(rollouts)
         metadata = get_group_metadata(datum_specs)
         assert metadata["method"] == "grpo"
-        assert metadata["stage"] == "full_multiturn_rl"
+        assert metadata["stage"] == "full_multistep_rl"
 
     def test_datums_have_advantage_metadata(self, rollouts):
         datum_specs, _, _ = build_grpo_group_from_rollouts(rollouts)
@@ -114,7 +114,7 @@ class TestBuildGrpoGroupFromRollouts:
 
     def test_stage_config_returned(self, rollouts):
         _, stage_config, _ = build_grpo_group_from_rollouts(rollouts)
-        assert stage_config.stage == TrainingStage.FULL_MULTITURN_RL
+        assert stage_config.stage == TrainingStage.FULL_MULTISTEP_RL
 
     def test_custom_stage(self, rollouts):
         datum_specs, stage_config, _ = build_grpo_group_from_rollouts(
