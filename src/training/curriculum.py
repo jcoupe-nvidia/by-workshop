@@ -29,7 +29,7 @@ Owns:
 Does NOT own:
     - Reward computation (see envs.rewards, training.reward_views)
     - Dataset construction (see training.datasets)
-    - openpipe-art record building (see training.openpipe_art_adapter)
+    - NeMo RL DatumSpec building (see training.nemo_rl_adapter)
 """
 from __future__ import annotations
 

@@ -33,7 +33,10 @@ from nemo_gym.rollout_collection import (
     RolloutCollectionConfig,
     RolloutCollectionHelper,
 )
-from nemo_gym.reward_profile import RewardProfiler
+try:
+    from nemo_gym.reward_profile import RewardProfiler
+except ImportError:
+    RewardProfiler = None  # type: ignore[assignment,misc]
 
 from src.envs.nemo_gym_adapter import (
     NemoGymResultRow,

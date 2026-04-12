@@ -15,7 +15,7 @@ Does NOT own:
     - Curriculum stage definitions (see training.curriculum)
     - Dataset construction or filtering (see training.datasets)
     - Reward computation or shaping (see envs.rewards, training.reward_views)
-    - openpipe-art record building (see training.openpipe_art_adapter)
+    - NeMo RL DatumSpec building (see training.nemo_rl_adapter)
 """
 from __future__ import annotations
 
@@ -261,7 +261,7 @@ def build_default_experiment_plan(
             "late-order recovery scenario (SO-10482). Progresses from SFT "
             "through short-horizon GRPO, full multi-turn GRPO, and robustness "
             "training. RL stages use GRPO with group-relative advantage over "
-            "grouped trajectories. Exports are consumed by openpipe-art."
+            "grouped trajectories. Exports are consumed by NeMo RL."
         ),
     )
 

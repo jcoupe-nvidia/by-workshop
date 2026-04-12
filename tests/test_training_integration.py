@@ -2,7 +2,7 @@
 
 Covers:
     - reward_views: step vs trajectory blend is distinct (issue #4)
-    - openpipe_art_adapter: validation/repair/reject events in trajectory (issue #3)
+    - nemo_rl_adapter: validation/repair/reject events in DatumSpec (issue #3)
     - datasets._maybe_truncate: truncated reward recomputation (issue #7)
     - nemo_gym_adapter: session safety and canonical validation (issues #1, #2)
     - nemo_gym_adapter: verify() async path integration (issue #2 extended)
@@ -50,7 +50,7 @@ from src.training.datasets import (
     _maybe_truncate,
     build_training_dataset,
 )
-from src.training.openpipe_art_adapter import episode_to_art_trajectory
+from src.training.nemo_rl_adapter import episode_to_datum_spec
 from src.eval.metrics import (
     eval_skill_selection,
     evaluate_nemo_gym_result,
@@ -70,7 +70,6 @@ class TestRewardViewStepTrajectoryBlend:
     def test_blend_produces_different_result_when_weights_differ(self):
         """When step_weight != trajectory_weight, the combined reward must
         NOT collapse to (step_weight + trajectory_weight) * same_number."""
-        # Build a reward summary with step rewards and a terminal reward
         step_signals = [
             RewardSignal(valid_call=1.0, correct_tool=1.0, correct_arguments=1.0,
                          dependency_satisfied=1.0, non_redundant=1.0, progress=1.0,
@@ -86,7 +85,6 @@ class TestRewardViewStepTrajectoryBlend:
         )
         summary = summarize_episode_rewards(step_signals, terminal_signal)
 
-        # Use a stage where step and trajectory weights differ significantly
         stage = StageConfig(
             stage=TrainingStage.SHORT_HORIZON_RL,
             description="test",
@@ -96,19 +94,12 @@ class TestRewardViewStepTrajectoryBlend:
 
         view = build_episode_reward_view(summary, stage)
 
-        # The step-level average (excluding terminal) should differ from
-        # the trajectory-level average (including terminal) because the
-        # terminal signal has terminal_quality=0.9 but all other components
-        # at 0.0, which pulls the trajectory average differently.
         step_only_avg = sum(sv.shaped_reward for sv in view.step_views) / len(view.step_views)
         all_avg = view.trajectory_reward
 
-        # They should be different because terminal_view is included in
-        # trajectory but not in step-only average
         assert view.terminal_view is not None
         assert abs(step_only_avg - all_avg) > 0.001 or len(view.step_views) == 0
 
-        # The combined reward should not just be (sw + tw) * trajectory_reward
         naive = (0.7 + 0.3) * view.trajectory_reward
         assert abs(view.combined_reward - naive) > 0.001
 
@@ -126,46 +117,42 @@ class TestRewardViewStepTrajectoryBlend:
 
 
 # ---------------------------------------------------------------------------
-# Issue #3: openpipe-art adapter includes validation/repair/reject events
+# Issue #3: nemo_rl_adapter includes validation/repair/reject events
 # ---------------------------------------------------------------------------
 
-class TestArtTrajectoryIncludesFailureEvents:
-    """art.Trajectory messages must include validation errors, repair
+class TestDatumSpecIncludesFailureEvents:
+    """DatumSpec messages must include validation errors, repair
     attempts, and rejects — not just tool calls and terminal."""
 
     def test_repair_episode_has_error_messages(self):
-        """A repair episode should produce art messages for the error events."""
+        """A repair episode should produce messages for the error events."""
         episode = build_repair_episode()
-        trajectory = episode_to_art_trajectory(episode)
+        datum = episode_to_datum_spec(episode)
 
-        messages = trajectory.messages_and_choices
-        # Filter to tool-role dicts (skip Choice objects which are assistant msgs)
-        message_contents = [
-            json.loads(m["content"]) if m["content"] else {}
+        messages = datum["message_log"]
+        tool_messages = [
+            json.loads(m["content"]) if m.get("content") else {}
             for m in messages
-            if isinstance(m, dict) and m.get("role") == "tool" and m.get("content")
+            if m.get("role") == "tool" and m.get("content")
         ]
 
-        # Should contain at least one error message and one repair message
-        error_msgs = [c for c in message_contents if "error" in c]
-        repair_msgs = [c for c in message_contents if "repair_succeeded" in c]
-        reject_msgs = [c for c in message_contents if "rejected" in c]
+        error_msgs = [c for c in tool_messages if "error" in c]
+        repair_msgs = [c for c in tool_messages if "repair_succeeded" in c]
+        reject_msgs = [c for c in tool_messages if "rejected" in c]
 
-        assert len(error_msgs) > 0, "No validation error messages in art trajectory"
-        assert len(repair_msgs) > 0, "No repair attempt messages in art trajectory"
-        assert len(reject_msgs) > 0, "No reject messages in art trajectory"
+        assert len(error_msgs) > 0, "No validation error messages in DatumSpec"
+        assert len(repair_msgs) > 0, "No repair attempt messages in DatumSpec"
+        assert len(reject_msgs) > 0, "No reject messages in DatumSpec"
 
     def test_successful_episode_unchanged(self):
         """A clean successful episode should not gain spurious error messages."""
         episode = build_successful_episode()
-        trajectory = episode_to_art_trajectory(episode)
-        messages = trajectory.messages_and_choices
+        datum = episode_to_datum_spec(episode)
 
-        # Filter to tool-role dicts (skip Choice objects which are assistant msgs)
+        messages = datum["message_log"]
         error_msgs = [
             m for m in messages
-            if isinstance(m, dict)
-            and m.get("role") == "tool"
+            if m.get("role") == "tool"
             and m.get("content")
             and "error" in (json.loads(m["content"]) if m["content"] else {})
         ]
@@ -196,7 +183,7 @@ class TestTruncateRecomputesReward:
         """Episode with 9 calls should not be truncated at max=15."""
         episode = enriched_success.episode
         result = _maybe_truncate(episode, 15)
-        assert result is episode  # same object, no copy
+        assert result is episode
 
     def test_truncated_reward_from_retained_events(self, enriched_success):
         """The truncated reward should match the sum of reward annotations
@@ -221,7 +208,6 @@ class TestEvalSkillSelectionUsesEnvSubgoals:
     def test_perfect_score_on_optimal(self, successful_episode):
         score = eval_skill_selection(successful_episode)
         assert score.score == pytest.approx(1.0, abs=0.01)
-        # Details should mention subgoals, not workflows
         assert "subgoal" in score.details.lower()
 
     def test_empty_episode_scores_zero(self):
@@ -245,7 +231,6 @@ class TestEvaluateNemoGymResultNormalization:
         )
         result = evaluate_nemo_gym_result(row)
 
-        # Must use "partial_overall" not "overall"
         assert "partial_overall" in result
         assert "overall" not in result
         assert "dimensions_missing" in result
@@ -259,7 +244,6 @@ class TestEvaluateNemoGymResultNormalization:
         )
         result = evaluate_nemo_gym_result(row)
 
-        # partial_overall should be in [0, 1] range since weights are normalized
         assert 0.0 <= result["partial_overall"] <= 1.0
 
     def test_type_error_on_wrong_input(self):
@@ -305,7 +289,6 @@ class TestNemoGymSessionSafety:
         session_id = str(uuid.uuid4())
         sessions[session_id] = session
 
-        # The key should be a valid UUID, not an id() integer
         for key in sessions:
             parsed = uuid.UUID(key)
             assert str(parsed) == key
@@ -383,7 +366,6 @@ def _make_verify_request(
         responses_create_params=params,
         response=response,
     )
-    # Attach session_id if provided (NeMo Gym would set this via middleware)
     if session_id is not None:
         object.__setattr__(req, "session_id", session_id)
     return req
@@ -437,8 +419,6 @@ class TestVerifyAsyncPath:
     def _cleanup(self):
         self._reset_sessions()
 
-    # -- Valid tool call -------------------------------------------------------
-
     def test_valid_tool_call_returns_positive_reward(self):
         """A valid get_order call should produce a positive reward."""
         server, sid, env = self._make_server()
@@ -453,13 +433,10 @@ class TestVerifyAsyncPath:
         assert env._step_rewards[0].valid_call > 0
         self._cleanup()
 
-    # -- Multiple valid steps --------------------------------------------------
-
     def test_multi_step_reward_accumulates(self):
         """Calling get_order then get_shipment_status should accumulate reward."""
         server, sid, env = self._make_server()
 
-        # Step 1: get_order
         req1 = _make_verify_request(
             [_make_function_call_item("get_order", {"order_id": "SO-10482"})],
             session_id=sid,
@@ -467,7 +444,6 @@ class TestVerifyAsyncPath:
         resp1 = asyncio.run(server.verify(req1))
         assert resp1.reward > 0.0
 
-        # Step 2: get_shipment_status (depends on get_order)
         req2 = _make_verify_request(
             [_make_function_call_item("get_shipment_status", {"order_id": "SO-10482"})],
             session_id=sid,
@@ -477,14 +453,11 @@ class TestVerifyAsyncPath:
         assert len(env._step_rewards) == 2
         self._cleanup()
 
-    # -- Invalid tool call (rejected) ------------------------------------------
-
     def test_unknown_tool_no_close_match_gets_rejected(self):
         """A completely unknown tool name with no fuzzy match should be rejected
         and produce a penalty reward."""
         server, sid, env = self._make_server()
 
-        # Use a name that won't fuzzy-match anything in the registry
         item = _make_function_call_item(
             "zzz_nonexistent_tool_xyz", {"foo": "bar"}
         )
@@ -492,44 +465,34 @@ class TestVerifyAsyncPath:
 
         resp = asyncio.run(server.verify(req))
 
-        # Should have recorded an invalid step with penalty
         assert len(env._step_rewards) == 1
         assert env._step_rewards[0].valid_call < 0
         assert resp.reward < 0.0
         self._cleanup()
 
-    # -- Repaired tool call ----------------------------------------------------
-
     def test_fuzzy_tool_name_gets_repaired(self):
         """A close misspelling of a tool name should be repaired and executed."""
         server, sid, env = self._make_server()
 
-        # "get_ordr" is edit distance 1 from "get_order" -> should repair
         item = _make_function_call_item("get_ordr", {"order_id": "SO-10482"})
         req = _make_verify_request([item], session_id=sid)
 
         resp = asyncio.run(server.verify(req))
 
-        # The call should have been repaired and executed
         assert len(env._step_rewards) == 1
-        # Repair was attempted and succeeded
         assert env.state.repair_attempt_count >= 1
         self._cleanup()
-
-    # -- Terminal message (final answer) ---------------------------------------
 
     def test_terminal_message_produces_terminal_reward(self):
         """A message item should terminate the episode and produce a terminal reward."""
         server, sid, env = self._make_server()
 
-        # First do get_order so the env has some state
         req0 = _make_verify_request(
             [_make_function_call_item("get_order", {"order_id": "SO-10482"})],
             session_id=sid,
         )
         asyncio.run(server.verify(req0))
 
-        # Now send a final message
         final_answer = json.dumps({"action": "transfer", "rationale": "test"})
         msg_item = _make_message_item(final_answer)
         req = _make_verify_request([msg_item], session_id=sid)
@@ -552,8 +515,6 @@ class TestVerifyAsyncPath:
         assert env.is_terminal
         self._cleanup()
 
-    # -- Empty response --------------------------------------------------------
-
     def test_empty_output_returns_zero_reward(self):
         """A verify call with no output items should return reward=0.0."""
         server, sid, env = self._make_server()
@@ -564,8 +525,6 @@ class TestVerifyAsyncPath:
         assert resp.reward == 0.0
         assert len(env._step_rewards) == 0
         self._cleanup()
-
-    # -- Multiple items in single response ------------------------------------
 
     def test_multiple_tool_calls_in_one_response(self):
         """Multiple function_call items in one response should each be processed."""
@@ -583,8 +542,6 @@ class TestVerifyAsyncPath:
         assert resp.reward != 0.0
         self._cleanup()
 
-    # -- Session lookup --------------------------------------------------------
-
     def test_verify_uses_correct_session(self):
         """verify() should look up the environment by session_id."""
         from src.envs.nemo_gym_adapter import LateOrderResourceServer, _NemoGymSession
@@ -595,7 +552,6 @@ class TestVerifyAsyncPath:
         sessions = self._get_sessions()
         server = LateOrderResourceServer.__new__(LateOrderResourceServer)
 
-        # Seed two sessions
         env1 = LateOrderRecoveryEnv()
         env1.reset("SO-10482")
         rec1 = EpisodeRecorder(task_id="SO-10482", task_prompt="t", model_id="t")
@@ -608,20 +564,16 @@ class TestVerifyAsyncPath:
         sid2 = str(uuid.uuid4())
         sessions[sid2] = _NemoGymSession(env=env2, recorder=rec2)
 
-        # Send a tool call to session 2 only
         req = _make_verify_request(
             [_make_function_call_item("get_order", {"order_id": "SO-10482"})],
             session_id=sid2,
         )
         asyncio.run(server.verify(req))
 
-        # env2 should have been stepped, env1 should be untouched
         assert len(env2._step_rewards) == 1
         assert len(env1._step_rewards) == 0
 
         self._cleanup()
-
-    # -- Reward rounding -------------------------------------------------------
 
     def test_reward_is_rounded_to_4_decimals(self):
         """The returned reward should be rounded to 4 decimal places."""
@@ -633,15 +585,12 @@ class TestVerifyAsyncPath:
         )
         resp = asyncio.run(server.verify(req))
 
-        # Check that reward string representation has at most 4 decimal places
         reward_str = f"{resp.reward:.10f}"
         after_4th = reward_str.split(".")[1][4:]
         assert all(c == "0" for c in after_4th), (
             f"Reward {resp.reward} not rounded to 4 decimals"
         )
         self._cleanup()
-
-    # -- Response passthrough --------------------------------------------------
 
     def test_response_fields_passed_through(self):
         """BaseVerifyResponse should carry through responses_create_params and response."""
@@ -656,19 +605,15 @@ class TestVerifyAsyncPath:
         assert resp.response is req.response
         self._cleanup()
 
-    # -- Canonical semantics: same validate->repair->reject as runtime ---------
-
     def test_missing_arguments_rejected(self):
         """A tool call with missing required arguments should be rejected."""
         server, sid, env = self._make_server()
 
-        # get_inventory requires sku and dc_id — omit dc_id
         item = _make_function_call_item("get_inventory", {"sku": "SKU-4090"})
         req = _make_verify_request([item], session_id=sid)
 
         resp = asyncio.run(server.verify(req))
 
-        # Should be recorded as invalid (missing_arguments)
         assert len(env._step_rewards) == 1
         assert env._step_rewards[0].valid_call < 0
         self._cleanup()

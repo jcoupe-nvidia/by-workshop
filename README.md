@@ -100,7 +100,7 @@ src/
     curriculum.py
     datasets.py
     experiments.py
-    openpipe_art_adapter.py
+    nemo_rl_adapter.py
     reward_views.py
   eval/
     metrics.py
@@ -207,7 +207,7 @@ Export rollout artifacts:
 ```bash
 python -m src.main --rollout --save-jsonl artifacts/episode.jsonl
 python -m src.main --rollout --nemo-gym-export artifacts/nemo_gym_rows.jsonl
-python -m src.main --rollout --art-export artifacts/art_trajectories.jsonl
+python -m src.main --rollout --nemo-rl-export artifacts/nemo_rl_datums.jsonl
 ```
 
 ## Local Model
