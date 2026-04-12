@@ -2,7 +2,7 @@
 description: Review code for scalable, transparent RL workflows
 ---
 
-Read `@PLAN.md`, `@CLAUDE.md`, `@documents/RL_ARCHITECTURE.md`, and `@documents/NVIDIA_SOFTWARE_MAPPING.md`.
+Read `@PLAN.md`, `@CLAUDE.md`, `@documents/RL_ARCHITECTURE.md`, `@documents/NVIDIA_SOFTWARE_MAPPING.md`, and `@documents/NAT.md`.
 
 Review the current state of the code on the `main` branch.
 
@@ -55,7 +55,7 @@ During the review:
 - check whether the NVIDIA software mapping is reflected in the implementation, including:
   - `NAT` owning runtime-facing agent execution, tool registration, and skill surfaces
   - `NeMo Gym` owning environment-backed training-time execution and rollout collection surfaces
-  - `openpipe-art` owning trainer-facing datasets, reward views, and training handoff
+  - `NeMo RL` owning trainer-facing datasets, reward views, and training handoff
   - `eval/` remaining repo-owned rather than being absorbed into training or runtime code
   - repo-owned task contracts staying canonical instead of being redefined inside framework-specific adapters
 - check whether the design is compatible with multi-turn RL collection and GRPO-style post-training, including:
@@ -76,11 +76,11 @@ During the review:
   - where reward-relevant facts are created
   - where those facts are transformed into reward or advantage inputs
   - whether offline evaluation reuses canonical semantics instead of silently drifting
-- check whether module names, APIs, and data flow make the roles of NAT, the repo's rollout layer, and `openpipe-art` easy to explain to a workshop or engineering audience while keeping older trainer-facing, rollout-shaping, and scale-out systems references clearly historical
+- check whether module names, APIs, and data flow make the roles of NAT, the repo's rollout layer, and `NeMo RL` easy to explain to a workshop or engineering audience while keeping older trainer-facing, rollout-shaping, and scale-out systems references clearly historical
 - check whether the code and artifacts are teachable in an interactive demo, including:
   - whether a reviewer can point to the exact files and data structures that answer "what happened", "why did it happen", "what was scored", and "which layer owned that decision"
   - whether there are human-readable artifacts or summaries that make episode behavior understandable without reverse-engineering framework internals
-  - whether adapters to `NAT`, `NeMo Gym`, and `openpipe-art` stay thin enough that the repo-owned contracts remain the main teaching surface
+  - whether adapters to `NAT`, `NeMo Gym`, and `NeMo RL` stay thin enough that the repo-owned contracts remain the main teaching surface
 - check whether observability is strong enough for debugging and training analysis, including:
   - structured event tracing
   - clear episode and turn boundaries
@@ -88,6 +88,17 @@ During the review:
   - serialization surfaces for later analysis
   - metrics, summaries, or hooks that support regression analysis
   - ability to inspect both raw canonical traces and derived trainer/eval views without ambiguity
+- check whether NAT usage follows the best practices defined in `documents/NAT.md`, including:
+  - NAT stays as the runtime layer and does not absorb task-truth, reward, or evaluation responsibilities
+  - skills are explicit, small, and bounded with clear business-phase boundaries
+  - related tools that share config or state use NAT function groups instead of duplicated registrations
+  - workflow configuration is declarative (YAML-based) where appropriate instead of hardcoded in Python
+  - middleware is added intentionally and does not obscure tool behavior or debugging
+  - malformed calls, rejects, retries, and repairs are preserved in traces rather than silently fixed inside NAT wrappers
+  - observability is wired into the runtime for function execution details, latency, and token usage
+  - evaluation uses datasets and custom evaluators for repeatable checks, not only hand-run demos
+  - deterministic tools have isolated unit tests via `nat.test.ToolTestRunner` or equivalent
+  - model and provider configuration uses validated, provider-agnostic config surfaces
 - call out places where responsibilities overlap, where abstractions are ambiguous, where the wrong NVIDIA software appears to own a layer, or where future scaling would likely become harder
 - identify missing tests only when they materially affect the review priorities above
 

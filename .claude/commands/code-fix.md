@@ -2,7 +2,7 @@
 description: Fix issues from code review and run tests
 ---
 
-Read `@PLAN.md`, `@CLAUDE.md`, `@documents/RL_ARCHITECTURE.md`, and `@documents/NVIDIA_SOFTWARE_MAPPING.md`.
+Read `@PLAN.md`, `@CLAUDE.md`, `@documents/RL_ARCHITECTURE.md`, `@documents/NVIDIA_SOFTWARE_MAPPING.md`, and `@documents/NAT.md`.
 
 Fix the issues identified in `@code-review-issues.md`.
 
@@ -10,13 +10,15 @@ Prioritize fixes using the same review order:
 
 1. Best-practice RL architecture, with a strong focus on GRPO-readiness.
 2. Ensure the software defined in `documents/NVIDIA_SOFTWARE_MAPPING.md` is used for the layer and task described.
-3. Explainability of the code and clarity of responsibility boundaries across the layers defined in `documents/RL_ARCHITECTURE.md`.
-4. Strength and completeness of the observability layer.
+3. NAT usage follows the best practices defined in `documents/NAT.md`, including runtime-only ownership, explicit skills, function groups, declarative config, intentional middleware, trace preservation, and observability.
+4. Explainability of the code and clarity of responsibility boundaries across the layers defined in `documents/RL_ARCHITECTURE.md`.
+5. Strength and completeness of the observability layer.
 
 Before making changes:
 - review `@code-review-issues.md` and group the findings into concrete fix categories
 - confirm which findings are actionable code changes versus open questions or assumptions
 - preserve the ownership boundaries described in `@documents/RL_ARCHITECTURE.md`
+- follow the NAT best practices described in `@documents/NAT.md` when fixing runtime-layer issues
 - preserve the current phase status and sequencing in `@PLAN.md`
 - avoid speculative refactors that are not needed to resolve the review findings
 
