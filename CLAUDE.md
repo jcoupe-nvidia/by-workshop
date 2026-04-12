@@ -4,14 +4,14 @@
 
 This repository contains an MVP notebook for a workshop on agentic supply-chain workflows on the NVIDIA stack. It should emphasize:
 
-- multi-turn agent execution
+- multi-step agent execution
 - explicit higher-level skills composed from deterministic tools
 - structured tool calling for Nemotron-style models
 - fallback parsing for malformed or partially structured outputs
 - sequence-sensitive evaluation
 - clear ownership boundaries across `runtime/`, `envs/`, `rollouts/`, `training/`, and `eval/`
 
-This is a pedagogical artifact, not a production system. The goal is to show concrete patterns, tradeoffs, and evaluation methods in a form that is easy to present live.
+This is a teaching example, not a production system. The goal is to show concrete patterns, tradeoffs, and evaluation methods in a form that is easy to present live.
 
 ## Local model access reference
 
@@ -58,7 +58,6 @@ The agent should evaluate options such as:
 - Keep the logic explicit and easy to follow.
 - Separate scenario data, skills, tools, prompting, parsing, execution, fallback handling, and evaluation.
 - Keep the environment explicit: state, validity, transitions, preconditions, and reward-relevant facts should live in repo code.
-- Keep scenario-specific contracts repo-owned even when execution surfaces map to NAT, NeMo Gym, and `openpipe-art`.
 - Keep malformed calls, repairs, and rejects explicit in canonical traces rather than silently hiding them.
 - Avoid hidden magic, deep abstraction layers, unnecessary async, excessive visualization, large synthetic datasets, and production-grade packaging.
 - Prefer short cells, typed Python where practical, explicit comments, and predictable helper functions.
@@ -68,7 +67,7 @@ The agent should evaluate options such as:
 
 Keep the RL-facing code split across `runtime/`, `envs/`, `rollouts/`, `training/`, and `eval/`.
 
-Use `documents/RL_ARCHITECTURE.md` as the source of truth for layer responsibilities and best practices. Keep scenario contracts repo-owned.
+Use `documents/RL_ARCHITECTURE.md` as the source of truth for layer responsibilities and best practices. Use `documents/NVIDIA_SOFTWARE_MAPPING.md` as the source of truth for the NVIDIA-specific layer mapping. Keep scenario contracts repo-owned.
 
 ## Notebook requirements
 
@@ -106,7 +105,7 @@ The notebook should include these sections:
    - what should be supervised at the skill and trajectory level
    - how trajectories could be scored
    - how sequence-sensitive rewards could be defined
-   - how this maps to `openpipe-art`
+   - how this maps to `NeMo RL`
    - what earlier trainer-facing, rollout-shaping, and scale-out systems assumptions existed and why they were narrowed or removed
 
 ## MVP behavior constraints
@@ -134,7 +133,7 @@ The runtime skill architecture should expose these canonical interfaces:
 - `get_skill` as the detailed read path, loading either the full `SKILL.md` body or a specific sidecar file by relative path.
 - `run_skill_command` for executing scripts present in the skills folder.
 
-These NAT-facing interfaces should own skill discovery, inspection, and execution surfaces. Keep them separate from the deterministic business tools used by the supply-chain scenario and from NeMo Gym-owned training rollout execution.
+These NAT-facing interfaces should own skill discovery, inspection, and execution surfaces. Keep them separate from the deterministic business tools used by the supply-chain scenario and from NeMo Gym-owned environment and rollout execution.
 
 Suggested skills:
 
@@ -187,10 +186,10 @@ The notebook must define a canonical Nemotron-style tool-call format.
 These are the active requirements for the notebook design:
 
 - **NeMo Agent Toolkit (NAT)** for runtime-facing tool and skill execution
-- **NeMo Gym** for training-time environments and rollout collection
-- **`openpipe-art`** for trainer-facing datasets, rewards, and handoff
+- **NeMo Gym** for environment-backed execution and rollout collection
+- **NeMo RL** for trainer-facing datasets, rewards, and optimization handoff
 
-Integration should stay narrow, local, and demonstrative. See `documents/RL_ARCHITECTURE.md` for the responsibility split around this stack.
+Integration should stay narrow, local, and demonstrative. See `documents/RL_ARCHITECTURE.md` for the layer boundary and `documents/NVIDIA_SOFTWARE_MAPPING.md` for the software mapping around this stack.
 
 ## Target deployment environment
 
