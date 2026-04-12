@@ -3,7 +3,7 @@ channels:
   - conda-forge
   - defaults
 dependencies:
-  - python=3.13
+  - python=3.12.4
   - git
   - jupyterlab
   - ipykernel
@@ -14,5 +14,5 @@ dependencies:
       - uv
       - nvidia-nat
       - nemo-gym
-      - openai==2.6.1
-      - openpipe-art>=0.6.0
+      - openai
+      - nemo-rl

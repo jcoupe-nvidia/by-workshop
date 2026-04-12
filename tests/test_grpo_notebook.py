@@ -2,8 +2,8 @@
 
 Covers:
     - Rollout collection: correct episode counts and enrichment
-    - GRPO group assembly: trajectory group structure, advantages, stage shaping
-    - Artifact export: ATIF + trajectory group JSONL files exist and parse
+    - GRPO group assembly: datum group structure, advantages, stage shaping
+    - Artifact export: ATIF + datum group JSONL files exist and parse
     - Plot data extraction: correct keys and shape
     - Dry-run training: mock metrics structure
     - End-to-end run_grpo_notebook: full pipeline smoke test
@@ -24,9 +24,8 @@ from src.training.grpo_notebook import (
     run_grpo_notebook,
     GRPORunResult,
     _dry_run_train,
-    _check_art_version_for_training,
 )
-from src.training.openpipe_art_adapter import get_group_metadata
+from src.training.nemo_rl_adapter import get_group_metadata
 from src.training.curriculum import TrainingStage, get_stage_config
 from src.training.datasets import build_training_dataset, _truncate_reward_summary
 from src.rollouts.episode_runner import EnrichedEpisodeResult
@@ -75,40 +74,41 @@ class TestCollectEnrichedRollouts:
 # ---------------------------------------------------------------------------
 
 class TestBuildGrpoGroupFromRollouts:
-    """Verify GRPO trajectory group structure and advantage computation."""
+    """Verify GRPO datum group structure and advantage computation."""
 
     @pytest.fixture
     def rollouts(self):
         return collect_enriched_rollouts(num_rollouts=4, include_repairs=True)
 
-    def test_group_has_correct_trajectory_count(self, rollouts):
-        group, _, _ = build_grpo_group_from_rollouts(rollouts)
-        assert len(group.trajectories) == len(rollouts)
+    def test_group_has_correct_datum_count(self, rollouts):
+        datum_specs, _, _ = build_grpo_group_from_rollouts(rollouts)
+        assert len(datum_specs) == len(rollouts)
 
     def test_group_has_grpo_metadata(self, rollouts):
-        group, _, _ = build_grpo_group_from_rollouts(rollouts)
-        metadata = get_group_metadata(group)
+        datum_specs, _, _ = build_grpo_group_from_rollouts(rollouts)
+        metadata = get_group_metadata(datum_specs)
         assert metadata["method"] == "grpo"
         assert metadata["stage"] == "full_multiturn_rl"
 
-    def test_trajectories_have_advantage_metadata(self, rollouts):
-        group, _, _ = build_grpo_group_from_rollouts(rollouts)
-        for t in group.trajectories:
-            assert "group_advantage" in t.metadata
-            assert "group_mean_reward" in t.metadata
-            assert "group_task_id" in t.metadata
+    def test_datums_have_advantage_metadata(self, rollouts):
+        datum_specs, _, _ = build_grpo_group_from_rollouts(rollouts)
+        for d in datum_specs:
+            info = d["extra_env_info"]
+            assert "group_advantage" in info
+            assert "group_mean_reward" in info
+            assert "group_task_id" in info
 
     def test_advantages_sum_to_zero(self, rollouts):
-        group, _, _ = build_grpo_group_from_rollouts(rollouts)
+        datum_specs, _, _ = build_grpo_group_from_rollouts(rollouts)
         advantages = [
-            t.metadata["group_advantage"]
-            for t in group.trajectories
+            d["extra_env_info"]["group_advantage"]
+            for d in datum_specs
         ]
         assert abs(sum(advantages)) < 1e-3, (
             f"Advantages should sum to ~0, got {sum(advantages)}"
         )
 
-    def test_reward_views_match_trajectory_count(self, rollouts):
+    def test_reward_views_match_datum_count(self, rollouts):
         _, _, views = build_grpo_group_from_rollouts(rollouts)
         assert len(views) == len(rollouts)
 
@@ -117,16 +117,27 @@ class TestBuildGrpoGroupFromRollouts:
         assert stage_config.stage == TrainingStage.FULL_MULTITURN_RL
 
     def test_custom_stage(self, rollouts):
-        group, stage_config, _ = build_grpo_group_from_rollouts(
+        datum_specs, stage_config, _ = build_grpo_group_from_rollouts(
             rollouts, stage=TrainingStage.SHORT_HORIZON_RL,
         )
         assert stage_config.stage == TrainingStage.SHORT_HORIZON_RL
-        assert get_group_metadata(group)["stage"] == "short_horizon_rl"
+        assert get_group_metadata(datum_specs)["stage"] == "short_horizon_rl"
 
-    def test_trajectories_have_positive_rewards(self, rollouts):
-        group, _, _ = build_grpo_group_from_rollouts(rollouts)
-        for t in group.trajectories:
-            assert t.reward > 0, f"Expected positive reward, got {t.reward}"
+    def test_datums_have_positive_rewards(self, rollouts):
+        datum_specs, _, _ = build_grpo_group_from_rollouts(rollouts)
+        for d in datum_specs:
+            reward = d["extra_env_info"]["reward"]
+            assert reward > 0, f"Expected positive reward, got {reward}"
+
+    def test_datums_have_valid_datum_spec_keys(self, rollouts):
+        datum_specs, _, _ = build_grpo_group_from_rollouts(rollouts)
+        for d in datum_specs:
+            assert "message_log" in d
+            assert "length" in d
+            assert "extra_env_info" in d
+            assert "loss_multiplier" in d
+            assert "idx" in d
+            assert "task_name" in d
 
 
 # ---------------------------------------------------------------------------
@@ -134,27 +145,27 @@ class TestBuildGrpoGroupFromRollouts:
 # ---------------------------------------------------------------------------
 
 class TestExportArtifacts:
-    """Verify ATIF and trajectory group artifacts are written correctly."""
+    """Verify ATIF and datum group artifacts are written correctly."""
 
     @pytest.fixture
     def grpo_data(self):
         rollouts = collect_enriched_rollouts(num_rollouts=2)
-        group, _, _ = build_grpo_group_from_rollouts(rollouts)
-        return rollouts, group
+        datum_specs, _, _ = build_grpo_group_from_rollouts(rollouts)
+        return rollouts, datum_specs
 
     def test_atif_file_created(self, grpo_data):
-        rollouts, group = grpo_data
+        rollouts, datum_specs = grpo_data
         with tempfile.TemporaryDirectory() as tmpdir:
-            atif_path, _ = export_artifacts(rollouts, group, tmpdir)
+            atif_path, _ = export_artifacts(rollouts, datum_specs, tmpdir)
             assert os.path.exists(atif_path)
             with open(atif_path) as f:
                 lines = f.readlines()
             assert len(lines) == len(rollouts)
 
     def test_atif_lines_are_valid_json(self, grpo_data):
-        rollouts, group = grpo_data
+        rollouts, datum_specs = grpo_data
         with tempfile.TemporaryDirectory() as tmpdir:
-            atif_path, _ = export_artifacts(rollouts, group, tmpdir)
+            atif_path, _ = export_artifacts(rollouts, datum_specs, tmpdir)
             with open(atif_path) as f:
                 for line in f:
                     parsed = json.loads(line)
@@ -162,19 +173,19 @@ class TestExportArtifacts:
                     assert "steps" in parsed
 
     def test_group_jsonl_created(self, grpo_data):
-        rollouts, group = grpo_data
+        rollouts, datum_specs = grpo_data
         with tempfile.TemporaryDirectory() as tmpdir:
-            _, group_path = export_artifacts(rollouts, group, tmpdir)
+            _, group_path = export_artifacts(rollouts, datum_specs, tmpdir)
             assert os.path.exists(group_path)
             with open(group_path) as f:
                 data = json.loads(f.readline())
-            assert "trajectories" in data
+            assert "datum_specs" in data
 
     def test_artifact_dir_created(self, grpo_data):
-        rollouts, group = grpo_data
+        rollouts, datum_specs = grpo_data
         with tempfile.TemporaryDirectory() as tmpdir:
             subdir = os.path.join(tmpdir, "nested", "dir")
-            export_artifacts(rollouts, group, subdir)
+            export_artifacts(rollouts, datum_specs, subdir)
             assert os.path.isdir(subdir)
 
 
@@ -240,21 +251,21 @@ class TestDryRunTrain:
 
     def test_returns_expected_keys(self):
         rollouts = collect_enriched_rollouts(num_rollouts=4)
-        group, stage_config, _ = build_grpo_group_from_rollouts(rollouts)
-        metrics = _dry_run_train(group, stage_config)
+        datum_specs, stage_config, _ = build_grpo_group_from_rollouts(rollouts)
+        metrics = _dry_run_train(datum_specs, stage_config)
 
         assert "step" in metrics
         assert "loss" in metrics
         assert "mean_reward" in metrics
         assert "reward_std" in metrics
         assert "mean_advantage" in metrics
-        assert "num_trajectories" in metrics
+        assert "num_datum_specs" in metrics
 
-    def test_num_trajectories_matches(self):
+    def test_num_datums_matches(self):
         rollouts = collect_enriched_rollouts(num_rollouts=4)
-        group, stage_config, _ = build_grpo_group_from_rollouts(rollouts)
-        metrics = _dry_run_train(group, stage_config)
-        assert metrics["num_trajectories"] == 4
+        datum_specs, stage_config, _ = build_grpo_group_from_rollouts(rollouts)
+        metrics = _dry_run_train(datum_specs, stage_config)
+        assert metrics["num_datum_specs"] == 4
 
 
 # ---------------------------------------------------------------------------
@@ -274,7 +285,7 @@ class TestRunGrpoNotebook:
             assert isinstance(result, GRPORunResult)
             assert result.dry_run is True
             assert len(result.enriched_results) == 4
-            assert len(result.trajectory_group.trajectories) == 4
+            assert len(result.datum_specs) == 4
             assert result.wall_time_seconds > 0
             assert os.path.exists(result.atif_path)
             assert os.path.exists(result.group_jsonl_path)
@@ -287,7 +298,7 @@ class TestRunGrpoNotebook:
                 artifact_dir=tmpdir,
             )
             assert result.train_metrics["step"] == 1
-            assert result.train_metrics["num_trajectories"] == 2
+            assert result.train_metrics["num_datum_specs"] == 2
 
     def test_print_summary_runs(self, capsys):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -314,10 +325,8 @@ class TestTruncatedRewardSummaryConsistency:
         """A truncated TrainingRecord should carry only the reward signals
         for the retained tool calls."""
         rollouts = collect_enriched_rollouts(num_rollouts=1)
-        # Use a stage config with very short max_episode_length to force truncation
         stage_config = get_stage_config(TrainingStage.SHORT_HORIZON_RL)
 
-        # The SHORT_HORIZON_RL stage has max_episode_length=3 typically
         dataset = build_training_dataset(rollouts, stage_config)
 
         for record in dataset.records:
@@ -337,7 +346,6 @@ class TestTruncatedRewardSummaryConsistency:
 
         for record in dataset.records:
             if record.episode.terminal is None:
-                # This record was truncated
                 assert record.reward_summary.terminal_reward is None
 
     def test_truncated_total_reward_matches_step_sum(self):
@@ -352,19 +360,6 @@ class TestTruncatedRewardSummaryConsistency:
             if record.reward_summary.terminal_reward:
                 expected += record.reward_summary.terminal_reward.total
             assert abs(record.reward_summary.total_reward - round(expected, 4)) < 1e-4
-
-
-# ---------------------------------------------------------------------------
-# Fix validation: openpipe-art version gate
-# ---------------------------------------------------------------------------
-
-class TestArtVersionGate:
-    """The version check should return a boolean for training readiness."""
-
-    def test_version_check_returns_bool(self):
-        """_check_art_version_for_training returns True when >= 0.6.0, False otherwise."""
-        result = _check_art_version_for_training()
-        assert isinstance(result, bool)
 
 
 # ---------------------------------------------------------------------------

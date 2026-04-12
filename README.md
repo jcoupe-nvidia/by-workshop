@@ -2,7 +2,7 @@
 
 MVP workshop repo for agentic supply-chain workflows on the NVIDIA stack.
 
-This repository is a pedagogical artifact, not a production system. It is designed to show a single rich, inspectable example of multi-turn agent execution, deterministic tool use, fallback handling, and sequence-sensitive evaluation.
+This repository is a teaching example, not a production system. It is designed to show a single rich, inspectable example of multi-turn agent execution, deterministic tool use, fallback handling, and sequence-sensitive evaluation.
 
 ## What This Repo Demonstrates
 
@@ -11,7 +11,7 @@ This repository is a pedagogical artifact, not a production system. It is design
 - Nemotron-style structured tool calling with validation, repair, and reject paths
 - Machine-checkable dependency ordering where sequence correctness matters
 - Repo-owned canonical traces, rewards, and offline evaluation
-- NVIDIA integrations through `Nemo Agent Toolike` and `NeMo Gym`
+- NVIDIA integrations through `NeMo Agent Toolkit (NAT)`, `NeMo Gym`, and `NeMo RL`
 
 ## Core Scenario
 
@@ -41,7 +41,7 @@ The notebook is a consumer and teaching surface. The source of truth lives in re
 | `runtime/` | Interactive agent runtime, structured tool calls, prompts, fallbacks, skill discovery, and single-episode execution | `NeMo Agent Toolkit (NAT)` |
 | `envs/` | Task truth, state transitions, tool preconditions, terminal conditions, and reward-relevant facts | `NeMo Gym` |
 | `rollouts/` | Canonical episode capture, serialization, explicit retries/rejects/repairs, and adapters for collection/export | `NeMo Gym` adapters over repo-owned traces |
-| `training/` | Trainer-facing datasets, reward views, curriculum staging, and training handoff artifacts | `openpipe-art` |
+| `training/` | Trainer-facing datasets, reward views, curriculum staging, and training handoff artifacts | `NeMo RL` |
 | `eval/` | Offline measurement of skill selection, tool quality, sequence correctness, success, recovery, and efficiency | repo-owned |
 
 Keep these boundaries intact:
@@ -51,6 +51,16 @@ Keep these boundaries intact:
 - `rollouts/` records what happened.
 - `training/` turns trajectories into learning signals.
 - `eval/` measures quality and regressions.
+
+## NVIDIA Stack Versions
+
+The workshop docs and examples are aligned to the versions observed in the reference `nemo-rl` environment:
+
+- `nvidia-nat==1.6.0`
+- `nemo-gym==0.2.0`
+- `nemo-rl==0.5.0rc0`
+
+See `documents/NVIDIA_SOFTWARE_MAPPING.md` for the versioned stack reference and layer mapping.
 
 ## Repository Layout
 
@@ -90,7 +100,7 @@ src/
     curriculum.py
     datasets.py
     experiments.py
-    openpipe_art_adapter.py
+    nemo_rl_adapter.py
     reward_views.py
   eval/
     metrics.py
@@ -197,7 +207,7 @@ Export rollout artifacts:
 ```bash
 python -m src.main --rollout --save-jsonl artifacts/episode.jsonl
 python -m src.main --rollout --nemo-gym-export artifacts/nemo_gym_rows.jsonl
-python -m src.main --rollout --art-export artifacts/art_trajectories.jsonl
+python -m src.main --rollout --nemo-rl-export artifacts/nemo_rl_datums.jsonl
 ```
 
 ## Local Model
@@ -229,4 +239,4 @@ The workshop intentionally treats sequence correctness as first-class: a plausib
 - `PLAN.md`: migration status and current repo outcome
 - `CLAUDE.md`: repo purpose, scope, scenario, required stack, and notebook requirements
 - `documents/RL_ARCHITECTURE.md`: layer boundaries and RL design rules
-- `documents/NVIDIA_SOFTWARE_MAPPING.md`: mapping from repo layers to `NAT`, `NeMo Gym`, and `openpipe-art`
+- `documents/NVIDIA_SOFTWARE_MAPPING.md`: mapping from repo layers to `NAT`, `NeMo Gym`, and `NeMo RL`

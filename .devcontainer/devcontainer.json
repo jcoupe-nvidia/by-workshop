@@ -1,0 +1,28 @@
+{
+  "name": "nemo-rl",
+  "image": "nvcr.io/nvidia/nemo-rl:v0.5.0",
+  "workspaceFolder": "/workspace",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
+  "runArgs": [
+    "--gpus",
+    "all",
+    "--ipc=host"
+  ],
+  "remoteEnv": {
+    "VIRTUAL_ENV": "/opt/nemo_rl_venv",
+    "PATH": "/opt/nemo_rl_venv/bin:${containerEnv:PATH}"
+  },
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "python.defaultInterpreterPath": "/opt/nemo_rl_venv/bin/python",
+        "python.terminal.activateEnvironment": false
+      },
+      "extensions": [
+        "ms-python.python",
+        "ms-toolsai.jupyter",
+        "ms-vscode-remote.remote-containers"
+      ]
+    }
+  }
+}

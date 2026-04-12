@@ -3,7 +3,7 @@ Minimal entrypoint for running one episode outside the notebook.
 
 Usage:
     python -m src.main [--order ORDER_ID] [--check-imports] [--episode] [--rollout]
-                       [--nat] [--nemo-gym-export PATH]
+                       [--nat] [--nemo-gym-export PATH] [--nemo-rl-export PATH]
 
 This validates the package structure imports correctly and can run
 a full agent episode against the local model endpoint. Supports both
@@ -56,10 +56,10 @@ def main(argv: list[str] | None = None) -> None:
         help="Export the enriched episode as a NeMo Gym result row JSONL (requires --rollout).",
     )
     parser.add_argument(
-        "--art-export",
+        "--nemo-rl-export",
         default=None,
         metavar="PATH",
-        help="Export the episode as an art.Trajectory JSONL (requires --rollout).",
+        help="Export the episode as a NeMo RL DatumSpec JSONL (requires --rollout).",
     )
     args = parser.parse_args(argv)
 
@@ -74,7 +74,7 @@ def main(argv: list[str] | None = None) -> None:
             use_nat=args.nat,
             save_path=args.save_jsonl,
             nemo_gym_path=args.nemo_gym_export,
-            art_path=args.art_export,
+            nemo_rl_path=args.nemo_rl_export,
         )
         return
 
@@ -87,7 +87,7 @@ def main(argv: list[str] | None = None) -> None:
     print("Use --episode --nat to run via NAT FunctionGroup dispatch.")
     print("Use --rollout to run via the rollout layer with env rewards.")
     print("Use --rollout --nemo-gym-export PATH to export NeMo Gym result rows.")
-    print("Use --rollout --art-export PATH to export art.Trajectory JSONL.")
+    print("Use --rollout --nemo-rl-export PATH to export NeMo RL DatumSpec JSONL.")
     print("Use --check-imports to validate package structure.")
 
 
@@ -130,7 +130,7 @@ def _check_imports() -> None:
     import src.training.reward_views
     import src.training.datasets
     import src.training.experiments
-    import src.training.openpipe_art_adapter
+    import src.training.nemo_rl_adapter
 
     # Evaluation package
     import src.eval
@@ -146,7 +146,7 @@ def _run_rollout(
     use_nat: bool = False,
     save_path: str | None = None,
     nemo_gym_path: str | None = None,
-    art_path: str | None = None,
+    nemo_rl_path: str | None = None,
 ) -> None:
     """Run one episode via the rollout layer with environment rewards."""
     from src.rollouts.serializers import save_episodes_jsonl
@@ -162,7 +162,6 @@ def _run_rollout(
     print()
     result.print_summary()
 
-    # Show training trajectory conversion
     trajectory = episode_to_training_trajectory(
         result.episode,
         reward_summary=result.reward_summary,
@@ -179,14 +178,14 @@ def _run_rollout(
         save_enriched_as_nemo_gym([result], nemo_gym_path)
         print(f"Saved NeMo Gym result row to {nemo_gym_path}")
 
-    if art_path:
-        from src.training.openpipe_art_adapter import (
-            episode_to_art_trajectory,
-            save_art_trajectories_jsonl,
+    if nemo_rl_path:
+        from src.training.nemo_rl_adapter import (
+            episode_to_datum_spec,
+            save_datum_specs_jsonl,
         )
-        art_traj = episode_to_art_trajectory(result.episode)
-        save_art_trajectories_jsonl([art_traj], art_path)
-        print(f"Saved art.Trajectory to {art_path}")
+        datum = episode_to_datum_spec(result.episode)
+        save_datum_specs_jsonl([datum], nemo_rl_path)
+        print(f"Saved NeMo RL DatumSpec to {nemo_rl_path}")
 
 
 def _run_episode(order_id: str, use_nat: bool = False) -> None:

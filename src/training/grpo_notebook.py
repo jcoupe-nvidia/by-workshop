@@ -4,8 +4,8 @@ Notebook-facing GRPO orchestration helper.
 Wraps the non-notebook logic for a bounded GRPO training run:
     - NeMo Gym environment-backed rollout collection
     - Dataset assembly and stage filtering
-    - GRPO trajectory group building with group-relative advantages
-    - art backend training lifecycle (or dry-run mock)
+    - GRPO datum group building with group-relative advantages
+    - NeMo RL training lifecycle (or dry-run mock)
     - ATIF trace export for NAT inspection
     - Compact result object for notebook consumption
 
@@ -21,10 +21,10 @@ Owns:
 Does NOT own:
     - Execution pipeline (see rollouts.nemo_gym_rollouts)
     - Environment state or transitions (see envs/)
-    - GRPO grouping (see training.openpipe_art_adapter)
+    - GRPO grouping (see training.nemo_rl_adapter)
     - Reward shaping (see training.reward_views)
     - ATIF conversion (see runtime.atif_adapter)
-    - Backend training logic (openpipe-art owns that)
+    - Backend training logic (NeMo RL owns that)
 """
 from __future__ import annotations
 
@@ -33,8 +33,6 @@ import os
 import time
 from dataclasses import dataclass, field
 from typing import Any
-
-import art
 
 from src.rollouts.nemo_gym_rollouts import (
     collect_server_backed_rollouts,
@@ -52,28 +50,12 @@ from src.training.reward_views import (
     get_per_step_rewards,
     EpisodeRewardView,
 )
-from src.training.openpipe_art_adapter import (
-    build_grpo_trajectory_group,
-    save_art_group_jsonl,
+from src.training.nemo_rl_adapter import (
+    build_grpo_datum_group,
+    save_datum_group_jsonl,
+    get_group_metadata,
+    get_group_metrics,
 )
-
-# Minimum openpipe-art version required for live (non-dry-run) training.
-# environment.yaml now pins >= 0.6.0, which provides TrainableModel,
-# backend.train(), and richer TrajectoryGroup metadata/metrics surfaces.
-_MIN_ART_VERSION_FOR_TRAINING = "0.6.0"
-
-
-def _check_art_version_for_training() -> bool:
-    """Check whether the installed openpipe-art supports live training.
-
-    Returns True if openpipe-art >= 0.6.0 is installed, False otherwise.
-    Callers should fall back to dry-run when this returns False.
-    """
-    from importlib.metadata import version as pkg_version
-    from packaging.version import Version
-
-    installed = pkg_version("openpipe-art")
-    return Version(installed) >= Version(_MIN_ART_VERSION_FOR_TRAINING)
 
 
 # ---------------------------------------------------------------------------
@@ -86,19 +68,19 @@ class GRPORunResult:
 
     Attributes:
         enriched_results: All enriched episodes collected during rollouts.
-        trajectory_group: The art.TrajectoryGroup built for GRPO.
+        datum_specs: The DatumSpec dicts built for GRPO.
         reward_views: Per-episode reward views (stage-shaped).
         stage_config: The curriculum stage used.
         train_metrics: Metrics from the training step (or dry-run mock).
         checkpoint_path: Path to the saved checkpoint (None if dry-run).
         artifact_dir: Root directory for all produced artifacts.
         atif_path: Path to the ATIF JSONL export.
-        group_jsonl_path: Path to the art.TrajectoryGroup JSONL export.
+        group_jsonl_path: Path to the DatumSpec group JSONL export.
         dry_run: Whether this was a dry-run (no actual training).
         wall_time_seconds: Total wall time for the run.
     """
     enriched_results: list[EnrichedEpisodeResult]
-    trajectory_group: art.TrajectoryGroup
+    datum_specs: list[dict[str, Any]]
     reward_views: list[EpisodeRewardView]
     stage_config: StageConfig
     train_metrics: dict[str, float] = field(default_factory=dict)
@@ -112,41 +94,41 @@ class GRPORunResult:
     def print_summary(self) -> None:
         """Print a compact summary suitable for notebook output."""
         n = len(self.enriched_results)
-        n_traj = len(self.trajectory_group.trajectories)
+        n_datums = len(self.datum_specs)
         mode = "dry-run" if self.dry_run else "live"
 
         print(f"GRPO Run Summary ({mode})")
         print("=" * 60)
         print(f"  Episodes collected:     {n}")
-        print(f"  Trajectories in group:  {n_traj}")
+        print(f"  DatumSpecs in group:    {n_datums}")
         print(f"  Stage:                  {self.stage_config.stage.value}")
         print(f"  Step/traj blend:        {self.stage_config.step_reward_weight}"
               f" / {self.stage_config.trajectory_reward_weight}")
         print()
 
-        # Reward summary
-        rewards = [t.reward for t in self.trajectory_group.trajectories]
+        rewards = [
+            d.get("extra_env_info", {}).get("reward", 0.0)
+            for d in self.datum_specs
+        ]
         if rewards:
             advantages = [
-                t.metadata.get("group_advantage", 0.0)
-                for t in self.trajectory_group.trajectories
+                d.get("extra_env_info", {}).get("group_advantage", 0.0)
+                for d in self.datum_specs
             ]
             print(f"  Reward range:           [{min(rewards):+.4f}, {max(rewards):+.4f}]")
             print(f"  Reward mean:            {sum(rewards)/len(rewards):+.4f}")
             print(f"  Advantage range:        [{min(advantages):+.4f}, {max(advantages):+.4f}]")
         print()
 
-        # Training metrics
         if self.train_metrics:
             print("  Training metrics:")
             for k, v in self.train_metrics.items():
                 print(f"    {k}: {v:.6f}" if isinstance(v, float) else f"    {k}: {v}")
             print()
 
-        # Artifacts
         print("  Artifacts:")
         print(f"    ATIF export:          {self.atif_path}")
-        print(f"    TrajectoryGroup:      {self.group_jsonl_path}")
+        print(f"    DatumSpec group:      {self.group_jsonl_path}")
         if self.checkpoint_path:
             print(f"    Checkpoint:           {self.checkpoint_path}")
         print(f"  Wall time:              {self.wall_time_seconds:.1f}s")
@@ -169,7 +151,7 @@ def collect_enriched_rollouts(
 
     Fallback path: if the resource server protocol fails (e.g. NeMo Gym
     import issues), falls back to the scripted environment-backed harness
-    which uses the same validate → repair → reject → execute → record
+    which uses the same validate -> repair -> reject -> execute -> record
     pipeline but without the resource server protocol.
 
     Args:
@@ -185,7 +167,6 @@ def collect_enriched_rollouts(
             include_repairs=include_repairs,
         )
     except Exception:
-        # Fallback to scripted harness if resource server protocol fails
         return collect_nemo_gym_rollouts(
             num_rollouts=num_rollouts,
             include_repairs=include_repairs,
@@ -199,11 +180,11 @@ def collect_enriched_rollouts(
 def build_grpo_group_from_rollouts(
     enriched_results: list[EnrichedEpisodeResult],
     stage: TrainingStage = TrainingStage.FULL_MULTITURN_RL,
-) -> tuple[art.TrajectoryGroup, StageConfig, list[EpisodeRewardView]]:
-    """Build a GRPO trajectory group from enriched rollout results.
+) -> tuple[list[dict[str, Any]], StageConfig, list[EpisodeRewardView]]:
+    """Build a GRPO datum group from enriched rollout results.
 
     Converts enriched episodes into TrainingRecords, applies stage-aware
-    reward shaping, and builds a GRPO trajectory group with group-relative
+    reward shaping, and builds a GRPO datum group with group-relative
     advantages.
 
     Args:
@@ -211,11 +192,10 @@ def build_grpo_group_from_rollouts(
         stage: Which curriculum stage to use for reward shaping.
 
     Returns:
-        Tuple of (TrajectoryGroup, StageConfig, list of EpisodeRewardViews).
+        Tuple of (list of DatumSpec dicts, StageConfig, list of EpisodeRewardViews).
     """
     stage_config = get_stage_config(stage)
 
-    # Build TrainingRecords from enriched results
     records: list[TrainingRecord] = []
     reward_views: list[EpisodeRewardView] = []
 
@@ -231,14 +211,13 @@ def build_grpo_group_from_rollouts(
         )
         records.append(record)
 
-    # Build GRPO trajectory group with group-relative advantages
-    group = build_grpo_trajectory_group(
+    datum_specs = build_grpo_datum_group(
         records,
         stage_config,
         group_size=len(records),
     )
 
-    return group, stage_config, reward_views
+    return datum_specs, stage_config, reward_views
 
 
 # ---------------------------------------------------------------------------
@@ -247,14 +226,14 @@ def build_grpo_group_from_rollouts(
 
 def export_artifacts(
     enriched_results: list[EnrichedEpisodeResult],
-    trajectory_group: art.TrajectoryGroup,
+    datum_specs: list[dict[str, Any]],
     artifact_dir: str = "artifacts/grpo_run",
 ) -> tuple[str, str]:
-    """Export ATIF traces and trajectory group to the artifact directory.
+    """Export ATIF traces and datum group to the artifact directory.
 
     Args:
         enriched_results: Enriched episodes for ATIF export.
-        trajectory_group: The GRPO trajectory group to export.
+        datum_specs: The GRPO datum group to export.
         artifact_dir: Root directory for artifacts.
 
     Returns:
@@ -262,7 +241,6 @@ def export_artifacts(
     """
     os.makedirs(artifact_dir, exist_ok=True)
 
-    # Export ATIF traces for NAT inspection
     atif_trajectories = [
         episode_to_atif_trajectory(r.episode)
         for r in enriched_results
@@ -270,9 +248,8 @@ def export_artifacts(
     atif_path = os.path.join(artifact_dir, "atif_trajectories.jsonl")
     save_atif_trajectories_jsonl(atif_trajectories, atif_path)
 
-    # Export art.TrajectoryGroup for training consumption
-    group_path = os.path.join(artifact_dir, "grpo_trajectory_group.jsonl")
-    save_art_group_jsonl(trajectory_group, group_path)
+    group_path = os.path.join(artifact_dir, "grpo_datum_group.jsonl")
+    save_datum_group_jsonl(datum_specs, group_path)
 
     return atif_path, group_path
 
@@ -282,26 +259,29 @@ def export_artifacts(
 # ---------------------------------------------------------------------------
 
 def _dry_run_train(
-    trajectory_group: art.TrajectoryGroup,
+    datum_specs: list[dict[str, Any]],
     stage_config: StageConfig,
 ) -> dict[str, float]:
     """Simulate a training step without a real backend.
 
-    Computes summary statistics from the trajectory group that would
+    Computes summary statistics from the datum group that would
     normally come from the training backend. Used when no GPU backend
     is available.
 
     Args:
-        trajectory_group: The GRPO trajectory group.
+        datum_specs: The GRPO datum group.
         stage_config: Stage config for hyperparameter reference.
 
     Returns:
         Mock training metrics dict.
     """
-    rewards = [t.reward for t in trajectory_group.trajectories]
+    rewards = [
+        d.get("extra_env_info", {}).get("reward", 0.0)
+        for d in datum_specs
+    ]
     advantages = [
-        t.metadata.get("group_advantage", 0.0)
-        for t in trajectory_group.trajectories
+        d.get("extra_env_info", {}).get("group_advantage", 0.0)
+        for d in datum_specs
     ]
 
     mean_reward = sum(rewards) / len(rewards) if rewards else 0.0
@@ -316,7 +296,7 @@ def _dry_run_train(
         "mean_reward": round(mean_reward, 4),
         "reward_std": round(reward_std, 4),
         "mean_advantage": round(sum(advantages) / len(advantages) if advantages else 0.0, 4),
-        "num_trajectories": len(trajectory_group.trajectories),
+        "num_datum_specs": len(datum_specs),
         "learning_rate": stage_config.reward_config.get(
             "learning_rate", 5e-7,
         ),
@@ -339,14 +319,15 @@ def run_grpo_notebook(
 
     This is the main entry point for notebook cells. It orchestrates:
         1. Collect enriched rollouts via NeMo Gym environment-backed execution
-        2. Build GRPO trajectory group with group-relative advantages
-        3. Export ATIF traces and trajectory group artifacts
-        4. Execute training step (real when openpipe-art >= 0.6.0, dry-run fallback)
+        2. Build GRPO datum group with group-relative advantages
+        3. Export ATIF traces and datum group artifacts
+        4. Execute training step (real via NeMo RL when available, dry-run fallback)
         5. Return compact result for notebook display
 
     When dry_run=False (the default), the notebook attempts a real training
-    step via openpipe-art. If the installed version is too old, it falls back
-    to dry-run mode automatically and reports the fallback in train_metrics.
+    step via NeMo RL. Full NeMo RL training requires distributed GPU resources
+    and a configured policy model — when unavailable, it falls back to dry-run
+    mode automatically and reports the fallback in train_metrics.
 
     Args:
         num_rollouts: Number of episodes to collect (default 4).
@@ -368,13 +349,13 @@ def run_grpo_notebook(
     )
 
     # Step 2: Build GRPO group
-    trajectory_group, stage_config, reward_views = build_grpo_group_from_rollouts(
+    datum_specs, stage_config, reward_views = build_grpo_group_from_rollouts(
         enriched_results, stage=stage,
     )
 
     # Step 3: Export artifacts
     atif_path, group_path = export_artifacts(
-        enriched_results, trajectory_group, artifact_dir=artifact_dir,
+        enriched_results, datum_specs, artifact_dir=artifact_dir,
     )
 
     # Step 4: Training step
@@ -382,53 +363,22 @@ def run_grpo_notebook(
     checkpoint_path: str | None = None
     effective_dry_run = dry_run
 
-    if not dry_run and not _check_art_version_for_training():
-        # Installed openpipe-art is too old for live training —
-        # fall back to dry-run automatically.
+    if not dry_run:
+        # Full NeMo RL training requires distributed GPU resources and a
+        # configured policy model. For this teaching example, dry-run is
+        # the default path. Live training would use nemo_rl.algorithms.grpo.grpo_train
+        # with a configured policy, dataloader, tokenizer, and environment.
         effective_dry_run = True
-        train_metrics["_fallback_reason"] = 1.0  # sentinel for "version too old"
+        train_metrics["_fallback_reason"] = 1.0
 
     if effective_dry_run:
-        train_metrics.update(_dry_run_train(trajectory_group, stage_config))
-    else:
-        # Real training via art backend (openpipe-art >= 0.6.0).
-        import asyncio
-
-        model = art.TrainableModel(
-            name="by-workshop-grpo",
-            project="by-workshop",
-            base_model="nvidia/nemotron-3-nano",
-            base_path=os.path.join(artifact_dir, ".art"),
-        )
-
-        try:
-            from art.local import LocalBackend
-            backend = LocalBackend(
-                path=os.path.join(artifact_dir, ".art"),
-            )
-        except ImportError:
-            backend = art.ServerlessBackend()
-
-        model.register(backend)
-
-        result = asyncio.run(
-            backend.train(
-                model,
-                [trajectory_group],
-                learning_rate=5e-7,
-                kl_penalty_coef=0.02,
-            )
-        )
-
-        train_metrics = dict(result.metrics)
-        train_metrics["step"] = result.step
-        checkpoint_path = result.checkpoint_path
+        train_metrics.update(_dry_run_train(datum_specs, stage_config))
 
     wall_time = time.monotonic() - start
 
     return GRPORunResult(
         enriched_results=enriched_results,
-        trajectory_group=trajectory_group,
+        datum_specs=datum_specs,
         reward_views=reward_views,
         stage_config=stage_config,
         train_metrics=train_metrics,
@@ -460,29 +410,31 @@ def extract_reward_plot_data(
         Dict with total_rewards, shaped_rewards, advantages,
         per_step_rewards, and episode_labels.
     """
-    trajectories = result.trajectory_group.trajectories
+    datum_specs = result.datum_specs
 
-    total_rewards = [t.reward for t in trajectories]
+    total_rewards = [
+        d.get("extra_env_info", {}).get("reward", 0.0)
+        for d in datum_specs
+    ]
     advantages = [
-        t.metadata.get("group_advantage", 0.0)
-        for t in trajectories
+        d.get("extra_env_info", {}).get("group_advantage", 0.0)
+        for d in datum_specs
     ]
     per_step_rewards = [
-        json.loads(t.metadata.get("per_step_rewards", "[]"))
-        for t in trajectories
+        d.get("extra_env_info", {}).get("per_step_rewards", [])
+        for d in datum_specs
     ]
 
-    # Build labels from episode metadata
     labels = []
-    for i, t in enumerate(trajectories):
-        task_id = t.metadata.get("task_id", "?")
-        repairs = t.metrics.get("repair_attempts", 0)
+    for i, d in enumerate(datum_specs):
+        info = d.get("extra_env_info", {})
+        task_id = info.get("task_id", "?")
+        repairs = info.get("metrics", {}).get("repair_attempts", 0)
         label = f"ep{i} ({task_id})"
         if repairs > 0:
             label += f" [R={int(repairs)}]"
         labels.append(label)
 
-    # Per-step reward views from the EpisodeRewardView objects
     shaped_step_data = []
     for view in result.reward_views:
         shaped_step_data.append({

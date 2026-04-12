@@ -4,7 +4,7 @@ Repo-owned tool schemas and OpenAI-style tool definitions.
 Provides Pydantic input models for each business tool and a function to
 build OpenAI function-calling-style tool definitions. These are consumed
 by both the NAT runtime layer (for FunctionGroup registration) and the
-training layer (for art.Trajectory tool definitions) without requiring
+training layer (for DatumSpec tool definitions) without requiring
 either consumer to import the other's framework-specific code.
 
 Owns:
@@ -16,7 +16,7 @@ Owns:
 Does NOT own:
     - Tool implementations (see runtime.tools)
     - NAT Function wrappers (see runtime.nat_tools)
-    - Training trajectory construction (see training.openpipe_art_adapter)
+    - Training DatumSpec construction (see training.nemo_rl_adapter)
 """
 from __future__ import annotations
 
@@ -92,7 +92,7 @@ def build_openai_tool_definitions() -> list[dict[str, Any]]:
     """Build OpenAI function-calling-style tool definitions from Pydantic schemas.
 
     These are used in ATIF Trajectory.agent.tool_definitions, in
-    art.Trajectory.tools, and in the system prompt for structured tool calling.
+    NeMo RL DatumSpec tool definitions, and in the system prompt for structured tool calling.
     """
     definitions = []
     for tool_name, input_model in TOOL_INPUT_MODELS.items():
