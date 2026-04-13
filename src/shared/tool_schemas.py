@@ -10,6 +10,7 @@ either consumer to import the other's framework-specific code.
 Owns:
     - Pydantic input models per tool
     - Input model registry (tool_name -> model class)
+    - Tool metadata (descriptions, parameter specs) — self-contained
     - OpenAI-style tool definition builder
     - Default system prompt text for training export
 
@@ -17,6 +18,7 @@ Does NOT own:
     - Tool implementations (see runtime.tools)
     - NAT Function wrappers (see runtime.nat_tools)
     - Training DatumSpec construction (see training.nemo_rl_adapter)
+    - Tool dependency graph (see envs.state)
 """
 from __future__ import annotations
 
@@ -24,7 +26,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from src.runtime.tools import TOOL_REGISTRY, TOOL_DEPENDENCIES
+from src.envs.state import TOOL_DEPENDENCIES
 
 
 # ---------------------------------------------------------------------------
@@ -85,6 +87,73 @@ TOOL_INPUT_MODELS: dict[str, type[BaseModel]] = {
 
 
 # ---------------------------------------------------------------------------
+# Canonical Nemotron-style envelope schemas
+# ---------------------------------------------------------------------------
+
+class ToolCallInner(BaseModel):
+    """Inner structure of a tool call: the tool name and its arguments."""
+    name: str = Field(description="Name of the tool to invoke.")
+    arguments: dict[str, Any] = Field(description="Tool arguments as key-value pairs.")
+
+
+class NemotronToolCallEnvelope(BaseModel):
+    """Canonical envelope for a Nemotron-style tool call.
+
+    Every model response that invokes a tool must conform to this schema.
+    The ``thought`` field is optional but encouraged for reasoning transparency.
+    """
+    thought: str | None = Field(default=None, description="Optional short reasoning summary.")
+    tool_call: ToolCallInner
+
+
+class FinalAnswerPayload(BaseModel):
+    """Payload for a final recommendation answer."""
+    action: str = Field(description="Recommended mitigation action.")
+    rationale: str = Field(description="Why this action is best.")
+    expected_delivery: str | None = Field(default=None, description="Expected delivery date (YYYY-MM-DD).")
+    meets_committed_date: bool | None = Field(default=None, description="Whether the committed date is met.")
+    confidence: float | None = Field(default=None, description="Confidence score 0.0–1.0.")
+
+
+class NemotronFinalAnswerEnvelope(BaseModel):
+    """Canonical envelope for a Nemotron-style final answer.
+
+    Terminates the agent loop with a structured recommendation.
+    """
+    thought: str | None = Field(default=None, description="Optional reasoning summary.")
+    final_answer: FinalAnswerPayload
+
+
+# ---------------------------------------------------------------------------
+# Self-contained tool metadata (descriptions + parameter specs)
+# ---------------------------------------------------------------------------
+
+TOOL_DESCRIPTIONS: dict[str, str] = {
+    "get_order": "Look up order details by order ID.",
+    "get_shipment_status": "Get the current shipment status for an order.",
+    "get_inventory": "Check on-hand, reserved, and available inventory for a SKU at a specific DC.",
+    "find_alternate_inventory": "Search for available inventory of a SKU across DCs in a region. Use region='ALL' to search everywhere.",
+    "get_transfer_eta": "Estimate transfer time and cost to move units between DCs.",
+    "get_supplier_expedite_options": "Get available supplier expedite (rush) options for a SKU and quantity.",
+    "get_fulfillment_capacity": "Check available fulfillment capacity at a DC on a specific date.",
+    "score_recovery_options": "Score and rank a list of recovery options against an objective (e.g. 'minimize_delay', 'minimize_cost').",
+    "recommend_action": "Produce a final recommendation based on scored recovery options and order context.",
+}
+
+TOOL_PARAMS: dict[str, dict[str, str]] = {
+    "get_order": {"order_id": "str"},
+    "get_shipment_status": {"order_id": "str"},
+    "get_inventory": {"sku": "str", "dc_id": "str"},
+    "find_alternate_inventory": {"sku": "str", "region": "str"},
+    "get_transfer_eta": {"from_dc": "str", "to_dc": "str", "sku": "str", "qty": "int"},
+    "get_supplier_expedite_options": {"sku": "str", "qty": "int"},
+    "get_fulfillment_capacity": {"dc_id": "str", "date": "str"},
+    "score_recovery_options": {"options": "list[dict]", "objective": "str"},
+    "recommend_action": {"context": "dict"},
+}
+
+
+# ---------------------------------------------------------------------------
 # OpenAI-style tool definitions
 # ---------------------------------------------------------------------------
 
@@ -96,7 +165,7 @@ def build_openai_tool_definitions() -> list[dict[str, Any]]:
     """
     definitions = []
     for tool_name, input_model in TOOL_INPUT_MODELS.items():
-        _fn, _params, description = TOOL_REGISTRY[tool_name]
+        description = TOOL_DESCRIPTIONS[tool_name]
         schema = input_model.model_json_schema()
         schema.pop("title", None)
 
@@ -124,7 +193,9 @@ def build_default_system_prompt() -> str:
     export where the prompt is used as context, not as live runtime policy.
     """
     tool_descriptions = []
-    for name, (_fn, params, desc) in sorted(TOOL_REGISTRY.items()):
+    for name in sorted(TOOL_DESCRIPTIONS):
+        params = TOOL_PARAMS[name]
+        desc = TOOL_DESCRIPTIONS[name]
         param_str = ", ".join(f"{k}: {v}" for k, v in params.items())
         deps = TOOL_DEPENDENCIES.get(name, set())
         dep_str = ", ".join(sorted(deps)) if deps else "none"

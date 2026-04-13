@@ -80,16 +80,18 @@ def validate_and_repair(
         fb = try_repair(raw_output, tool_registry)
 
         if fb.action == FallbackAction.REPAIRED and fb.repaired:
+            result = validate_tool_call(fb.repaired, tool_registry)
+            re_valid = isinstance(result, (ParsedToolCall, ParsedFinalAnswer))
             if recorder is not None:
                 recorder.record_repair_attempt(
                     original_output=raw_output,
                     repaired_output=fb.repaired,
                     repairs_applied=fb.repairs_applied,
-                    succeeded=True,
+                    succeeded=re_valid,
                 )
-            result = validate_tool_call(fb.repaired, tool_registry)
             fallback_result = fb
-            was_repaired = True
+            if re_valid:
+                was_repaired = True
 
         elif fb.action == FallbackAction.REJECTED:
             if recorder is not None:

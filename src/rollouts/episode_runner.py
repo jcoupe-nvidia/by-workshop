@@ -152,11 +152,16 @@ def enrich_episode(
     Returns:
         EnrichedEpisodeResult with reward-annotated episode and summary.
     """
+    if episode.metadata.get("enriched"):
+        raise ValueError(
+            "Episode has already been enriched. Create a copy before "
+            "re-enriching to avoid double-counting rewards."
+        )
+
     task_id = order_id or episode.task_id
     env = LateOrderRecoveryEnv()
     env.reset(task_id)
 
-    # Populate env_state_init if not already set
     if not episode.env_state_init:
         episode.env_state_init = env.get_initial_state_snapshot()
 
@@ -232,8 +237,8 @@ def enrich_episode(
     # Get the full reward summary
     reward_summary = env.get_episode_reward_summary()
 
-    # Update episode metrics with total reward
     episode.metrics.total_reward = round(reward_summary.total_reward, 4)
+    episode.metadata["enriched"] = True
 
     return EnrichedEpisodeResult(
         episode=episode,

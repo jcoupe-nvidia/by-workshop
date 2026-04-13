@@ -18,7 +18,7 @@ ground truth used by both training and evaluation.
 
 The sequence correctness evaluator is the most important for this workshop:
 it checks that tools were called in an order consistent with the dependency
-graph defined in ``src.runtime.tools.TOOL_DEPENDENCIES``.
+graph defined in ``src.envs.state.TOOL_DEPENDENCIES``.
 """
 from __future__ import annotations
 
@@ -30,6 +30,7 @@ from src.rollouts.trace_types import (
     Event,
     EventType,
     ToolCallPayload,
+    ToolResultPayload,
     RepairAttemptPayload,
 )
 from src.envs.state import TOOL_DEPENDENCIES
@@ -224,9 +225,13 @@ def eval_sequence_correctness(episode: Episode) -> DimensionScore:
 
 
 def eval_task_success(episode: Episode) -> DimensionScore:
-    """Did the agent reach a valid final recommendation?
+    """Did the agent reach a valid and factually grounded recommendation?
 
-    Checks: episode completed, final_answer present, required fields exist.
+    Checks three layers:
+        1. Structural: episode completed, final_answer present, required fields.
+        2. Grounding: the recommended action references a feasible option that
+           appeared in a prior ``score_recovery_options`` result.
+        3. Optional quality: confidence and expected_delivery present.
     """
     if not episode.is_complete or episode.final_answer is None:
         reason = "incomplete" if not episode.is_complete else "no final answer"
@@ -242,21 +247,63 @@ def eval_task_success(episode: Episode) -> DimensionScore:
         details = f"Final answer missing fields: {missing}."
         return DimensionScore("task_success", round(score, 3), 1.0, details)
 
-    # Bonus: check if confidence and delivery date are present
+    structural_score = 0.7
+    grounding_score = 0.0
+    grounding_detail = ""
+
+    scored_options = _extract_scored_options(episode)
+    if scored_options is not None:
+        action_text = str(answer.get("action", "")).lower()
+        matched = any(
+            action_text and (
+                action_text in str(opt.get("description", "")).lower()
+                or action_text in str(opt.get("source", "")).lower()
+                or action_text in str(opt.get("supplier", "")).lower()
+            )
+            for opt in scored_options
+        )
+        if matched:
+            grounding_score = 0.2
+            grounding_detail = " Grounded in scored options."
+        else:
+            grounding_detail = " Action not found in scored recovery options."
+    else:
+        grounding_detail = " No score_recovery_options result to verify against."
+
     has_confidence = "confidence" in answer
     has_delivery = "expected_delivery" in answer
-    bonus_count = sum([has_confidence, has_delivery])
+    optional_score = 0.1 * sum([has_confidence, has_delivery]) / 2
 
-    score = 1.0
+    score = min(1.0, structural_score + grounding_score + optional_score)
     details = f"Valid final answer with action='{answer.get('action', '?')}'."
-    if bonus_count < 2:
+    details += grounding_detail
+    if not has_confidence or not has_delivery:
         extras = []
         if not has_confidence:
             extras.append("confidence")
         if not has_delivery:
             extras.append("expected_delivery")
         details += f" Missing optional: {extras}."
-    return DimensionScore("task_success", score, 1.0, details)
+    return DimensionScore("task_success", round(score, 3), 1.0, details)
+
+
+def _extract_scored_options(episode: Episode) -> list[dict[str, Any]] | None:
+    """Extract ranked_options from the most recent score_recovery_options result."""
+    from src.rollouts.trace_types import ToolResultPayload
+    import json as _json
+
+    for event in reversed(episode.events):
+        if event.event_type != EventType.TOOL_RESULT:
+            continue
+        payload = event.payload
+        if not isinstance(payload, ToolResultPayload):
+            continue
+        if payload.tool_name != "score_recovery_options":
+            continue
+        result = payload.result
+        if isinstance(result, dict) and "ranked_options" in result:
+            return result["ranked_options"]
+    return None
 
 
 def eval_recovery_quality(episode: Episode) -> DimensionScore:

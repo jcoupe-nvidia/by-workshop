@@ -58,21 +58,6 @@ SCENARIO_PROMPTS = [
         "DC-WEST-01. Determine whether the order can still be fulfilled on time. "
         "If not, recommend the best mitigation action."
     ),
-    (
-        "Order SO-10483 for 800 units of SKU-3080 needs expedited fulfillment. "
-        "The primary DC is DC-EAST-02 but stock is low. Check inventory and "
-        "find alternate sources."
-    ),
-    (
-        "Shipment for order SO-10484 (500 units of SKU-A100) from DC-CENTRAL-01 "
-        "is delayed. Evaluate whether a transfer from another DC or a supplier "
-        "expedite would resolve the delay."
-    ),
-    (
-        "Order SO-10485 for 2,000 units of SKU-7090 is partially fulfilled. "
-        "Only 1,200 units shipped from DC-WEST-01. Determine how to fulfill "
-        "the remaining 800 units."
-    ),
 ]
 
 
@@ -91,103 +76,48 @@ LateOrderMetadata = dict[str, Any]
 MAX_STEPS = 12
 
 
-def _score_tool_call_sequence(message_log: list[dict[str, Any]]) -> tuple[float, bool]:
-    """Score a multi-step tool-call sequence using the repo's environment.
+def _process_single_assistant_message(
+    content: str,
+    env: Any,
+    tool_registry: dict[str, Any],
+) -> tuple[float, bool]:
+    """Process one assistant message through the environment, returning (step_reward, is_terminal).
 
-    Replays all assistant messages through LateOrderRecoveryEnv, applying
-    the same dependency checking, subgoal tracking, and dense reward
-    computation as the interactive runtime.
-
-    Returns (total_reward, is_terminal).
+    Uses the same validation pipeline as the interactive runtime to ensure
+    parsing parity between training-time rewards and evaluation metrics.
     """
-    from src.envs.late_order_env import LateOrderRecoveryEnv as RepoEnv
-    from src.envs.state import TOOL_DEPENDENCIES
+    from src.runtime.schemas import (
+        ParsedToolCall,
+        ParsedFinalAnswer,
+        ValidationError as SchemaValidationError,
+        validate_tool_call,
+    )
 
-    env = RepoEnv()
-    env.reset("SO-10482")
+    result = validate_tool_call(content, tool_registry)
 
-    total_reward = 0.0
-    step_count = 0
-
-    for msg in message_log:
-        if msg.get("role") != "assistant":
-            continue
-        content = str(msg.get("content", ""))
-        if not content:
-            continue
-
-        parsed = _try_parse_tool_call(content)
-        if parsed is None:
-            result = env.record_invalid("malformed", "Could not parse tool call JSON")
-            step_reward = env.get_step_reward(env.get_step_count() - 1)
-            if step_reward:
-                total_reward += step_reward.total
-            step_count += 1
-            continue
-
-        if "final_answer" in parsed:
-            env.terminate("final_answer", parsed["final_answer"])
-            terminal_reward = env.get_terminal_reward()
-            if terminal_reward:
-                total_reward += terminal_reward.total
-            return total_reward, True
-
-        tool_call = parsed.get("tool_call", {})
-        tool_name = tool_call.get("name", "")
-        arguments = tool_call.get("arguments", {})
-
-        if tool_name not in TOOL_DEPENDENCIES:
-            result = env.record_invalid("unknown_tool", f"Unknown tool: {tool_name}")
-            step_reward = env.get_step_reward(env.get_step_count() - 1)
-            if step_reward:
-                total_reward += step_reward.total
-            step_count += 1
-            continue
-
-        from src.runtime.tools import TOOL_REGISTRY
-        if tool_name in TOOL_REGISTRY:
-            fn, _, _ = TOOL_REGISTRY[tool_name]
-            try:
-                tool_result = fn(**arguments)
-            except Exception:
-                tool_result = {"error": "execution_failed"}
-        else:
-            tool_result = {"error": f"Tool {tool_name} not in registry"}
-
-        env.step(tool_name, arguments, tool_result)
+    if isinstance(result, SchemaValidationError):
+        env.record_invalid(result.error_type, result.message)
         step_reward = env.get_step_reward(env.get_step_count() - 1)
-        if step_reward:
-            total_reward += step_reward.total
-        step_count += 1
+        return (step_reward.total if step_reward else 0.0), env.is_terminal
 
-        if env.is_terminal:
-            break
-
-    if not env.is_terminal and step_count > 0:
-        env.terminate("max_iterations")
+    if isinstance(result, ParsedFinalAnswer):
+        env.terminate("final_answer", result.answer)
         terminal_reward = env.get_terminal_reward()
-        if terminal_reward:
-            total_reward += terminal_reward.total
+        return (terminal_reward.total if terminal_reward else 0.0), True
 
-    summary = env.get_episode_reward_summary()
-    return summary.total_reward, env.is_terminal
+    assert isinstance(result, ParsedToolCall)
+    tool_name = result.tool_name
+    arguments = result.arguments
 
-
-def _try_parse_tool_call(content: str) -> dict[str, Any] | None:
-    """Attempt to parse a tool call or final answer from model output."""
+    fn, _, _ = tool_registry[tool_name]
     try:
-        return json.loads(content.strip())
-    except (json.JSONDecodeError, ValueError):
-        pass
+        tool_result = fn(**arguments)
+    except Exception:
+        tool_result = {"error": "execution_failed"}
 
-    for line in content.strip().split("\n"):
-        line = line.strip()
-        if line.startswith("{"):
-            try:
-                return json.loads(line)
-            except (json.JSONDecodeError, ValueError):
-                continue
-    return None
+    env.step(tool_name, arguments, tool_result)
+    step_reward = env.get_step_reward(env.get_step_count() - 1)
+    return (step_reward.total if step_reward else 0.0), env.is_terminal
 
 
 @ray.remote
@@ -195,6 +125,11 @@ class LateOrderRecoveryEnv(EnvironmentInterface[LateOrderMetadata]):
     """Multi-step environment that scores tool-call sequences using the repo's
     LateOrderRecoveryEnv for dependency checking, subgoal tracking, and
     dense decomposed rewards.
+
+    Persists a repo-owned RepoEnv per episode across NeMo RL step calls,
+    advancing only the new assistant message(s) on each step and returning
+    marginal (per-step) rewards. This avoids O(N²) replay and ensures NeMo RL
+    receives marginal rewards suitable for GRPO advantage computation.
 
     Each episode runs until the model emits a final_answer, reaches MAX_STEPS,
     or produces only invalid outputs. The environment provides intermediate
@@ -204,6 +139,23 @@ class LateOrderRecoveryEnv(EnvironmentInterface[LateOrderMetadata]):
     def __init__(self, cfg: Optional[dict] = None):
         self.cfg = cfg or {}
         self.max_steps = self.cfg.get("max_steps", MAX_STEPS)
+        self._envs: dict[int, Any] = {}
+        self._tool_registry: dict[str, Any] | None = None
+
+    def _get_tool_registry(self) -> dict[str, Any]:
+        if self._tool_registry is None:
+            from src.runtime.tools import TOOL_REGISTRY
+            self._tool_registry = dict(TOOL_REGISTRY)
+        return self._tool_registry
+
+    def _get_or_create_env(self, idx: int) -> Any:
+        """Get or create a persistent RepoEnv for the given episode index."""
+        if idx not in self._envs:
+            from src.envs.late_order_env import LateOrderRecoveryEnv as RepoEnv
+            env = RepoEnv()
+            env.reset("SO-10482")
+            self._envs[idx] = env
+        return self._envs[idx]
 
     def step(
         self,
@@ -216,6 +168,7 @@ class LateOrderRecoveryEnv(EnvironmentInterface[LateOrderMetadata]):
         all_stop_strings: list[list[str] | None] = []
         all_next_metadata: list[LateOrderMetadata | None] = []
         all_answers: list[str | None] = []
+        tool_registry = self._get_tool_registry()
 
         for message_log, meta in zip(message_log_batch, metadata):
             if meta is None:
@@ -228,35 +181,72 @@ class LateOrderRecoveryEnv(EnvironmentInterface[LateOrderMetadata]):
                 continue
 
             step_num = meta.get("step_num", 0) + 1
+            episode_idx = meta.get("episode_idx", id(meta))
+            messages_processed = meta.get("messages_processed", 0)
+            cumulative_reward = meta.get("cumulative_reward", 0.0)
 
-            reward, is_done = _score_tool_call_sequence(message_log)
+            env = self._get_or_create_env(episode_idx)
+
+            marginal_reward = 0.0
+            new_messages_processed = messages_processed
+            is_done = env.is_terminal
+
+            for msg in message_log[messages_processed:]:
+                if msg.get("role") != "assistant":
+                    new_messages_processed += 1
+                    continue
+                content = str(msg.get("content", ""))
+                if not content:
+                    new_messages_processed += 1
+                    continue
+
+                step_reward, is_done = _process_single_assistant_message(
+                    content, env, tool_registry,
+                )
+                marginal_reward += step_reward
+                new_messages_processed += 1
+
+                if is_done:
+                    break
+
+            new_cumulative = cumulative_reward + marginal_reward
 
             last_content = ""
             if message_log and message_log[-1].get("role") == "assistant":
                 last_content = str(message_log[-1].get("content", ""))
 
-            parsed = _try_parse_tool_call(last_content) if last_content else None
-            has_final = parsed is not None and "final_answer" in parsed
             at_limit = step_num >= self.max_steps
+            terminated = is_done or at_limit
 
-            terminated = is_done or has_final or at_limit
+            if not is_done and at_limit and not env.is_terminal:
+                env.terminate("max_iterations")
+                terminal_reward = env.get_terminal_reward()
+                if terminal_reward:
+                    marginal_reward += terminal_reward.total
+                    new_cumulative += terminal_reward.total
+                terminated = True
 
             if terminated:
                 observations.append({
                     "role": "environment",
-                    "content": f"Episode complete after {step_num} steps. Reward: {reward:.4f}",
+                    "content": f"Episode complete after {step_num} steps. Reward: {new_cumulative:.4f}",
                 })
                 all_next_metadata.append(None)
                 all_answers.append(last_content[:200] if last_content else None)
+                if episode_idx in self._envs:
+                    del self._envs[episode_idx]
             else:
-                obs_text = _build_step_observation(parsed, step_num)
+                obs_text = _build_step_observation(last_content, step_num, tool_registry)
                 observations.append({"role": "environment", "content": obs_text})
                 next_meta = dict(meta)
                 next_meta["step_num"] = step_num
+                next_meta["messages_processed"] = new_messages_processed
+                next_meta["cumulative_reward"] = new_cumulative
+                next_meta["episode_idx"] = episode_idx
                 all_next_metadata.append(next_meta)
                 all_answers.append(None)
 
-            rewards.append(reward)
+            rewards.append(marginal_reward)
             terminateds.append(terminated)
             all_stop_strings.append(None)
 
@@ -270,7 +260,7 @@ class LateOrderRecoveryEnv(EnvironmentInterface[LateOrderMetadata]):
         )
 
     def shutdown(self):
-        pass
+        self._envs.clear()
 
     def global_post_process_and_metrics(
         self, batch: BatchedDataDict
@@ -290,26 +280,38 @@ class LateOrderRecoveryEnv(EnvironmentInterface[LateOrderMetadata]):
         }
 
 
-def _build_step_observation(parsed: dict | None, step_num: int) -> str:
+def _build_step_observation(
+    last_content: str,
+    step_num: int,
+    tool_registry: dict[str, Any],
+) -> str:
     """Build a step observation to guide the model toward the next tool."""
-    if parsed is None:
+    from src.runtime.schemas import (
+        ParsedToolCall,
+        ParsedFinalAnswer,
+        validate_tool_call,
+    )
+
+    if not last_content:
         return (
             f"Step {step_num}: Could not parse your response as valid JSON. "
             f"Please respond with a JSON tool call or final answer."
         )
 
-    tool_call = parsed.get("tool_call", {})
-    tool_name = tool_call.get("name", "unknown")
+    result = validate_tool_call(last_content, tool_registry)
+
+    if isinstance(result, ParsedToolCall):
+        return f"Step {step_num}: Tool '{result.tool_name}' executed. Continue with the next step."
+
+    if isinstance(result, ParsedFinalAnswer):
+        return f"Step {step_num}: Final answer received."
 
     from src.envs.state import TOOL_DEPENDENCIES
-    if tool_name not in TOOL_DEPENDENCIES:
-        return (
-            f"Step {step_num}: Unknown tool '{tool_name}'. "
-            f"Available tools: {', '.join(sorted(TOOL_DEPENDENCIES.keys()))}. "
-            f"Please call a valid tool."
-        )
-
-    return f"Step {step_num}: Tool '{tool_name}' executed. Continue with the next step."
+    return (
+        f"Step {step_num}: Could not parse your response. "
+        f"Available tools: {', '.join(sorted(TOOL_DEPENDENCIES.keys()))}. "
+        f"Please respond with a valid JSON tool call or final answer."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -356,6 +358,9 @@ class LateOrderDataset(IterableDataset):
                 "prompt_idx": i % len(SCENARIO_PROMPTS),
                 "task_name": "late_order_recovery",
                 "step_num": 0,
+                "episode_idx": i,
+                "messages_processed": 0,
+                "cumulative_reward": 0.0,
             }
 
             datum: DatumSpec = {
