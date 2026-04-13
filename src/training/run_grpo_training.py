@@ -343,6 +343,7 @@ class LateOrderTrainingEnv(EnvironmentInterface[LateOrderMetadata]):
         self._envs: dict[int, Any] = {}
         self._tool_registry: dict[str, Any] | None = None
         self._profiling_done = False
+        self._profile_result: dict | None = None
 
     def _get_tool_registry(self) -> dict[str, Any]:
         # Lazy import of tool implementations from runtime/.  The training
@@ -507,6 +508,7 @@ class LateOrderTrainingEnv(EnvironmentInterface[LateOrderMetadata]):
                     for r in final_rewards
                 ]
                 profile = profile_reward_distribution(pilot_specs, label="post-first-step")
+                self._profile_result = profile
                 if not profile["pass"]:
                     import logging
                     logging.getLogger(__name__).warning(
@@ -514,10 +516,13 @@ class LateOrderTrainingEnv(EnvironmentInterface[LateOrderMetadata]):
                         "GRPO training may not provide useful signal."
                     )
 
-        return batch, {
+        metrics = {
             "mean_reward": round(mean_reward, 4),
-            "tool_call_success_rate": round(success_rate, 4),
+            "high_reward_rate": round(success_rate, 4),
         }
+        if self._profile_result is not None:
+            metrics["reward_profile"] = self._profile_result
+        return batch, metrics
 
 
 def _build_step_observation(

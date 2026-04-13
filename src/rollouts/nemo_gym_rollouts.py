@@ -161,6 +161,11 @@ def _process_function_call(
             and vr.fallback_result.action == fallback_action_cls.REJECTED):
         env.record_fallback_repair(succeeded=False)
         env.record_fallback_reject()
+        recorder.record_validation_error(
+            error_type="rejected",
+            message=vr.fallback_result.rejection_reason or "Unrecoverable output",
+            raw_model_output=raw_output,
+        )
         env.record_invalid(
             "rejected",
             vr.fallback_result.rejection_reason or "Unrecoverable output",
@@ -323,78 +328,17 @@ def _build_successful_actions() -> list[AgentAction]:
     """Build the scripted action sequence for a successful SO-10482 trajectory.
 
     Returns AgentAction objects suitable for process_agent_actions().
-    Uses the same tool sequence as scripted_traces.build_successful_episode()
-    but as AgentAction structs rather than pre-built Event objects.
+    Uses the canonical tool sequence from canonical_sequences so that
+    scenario data is single-sourced with scripted_traces.
     """
-    from src.runtime.tools import TOOL_REGISTRY
+    from src.rollouts.canonical_sequences import build_successful_steps, build_final_answer
 
-    # Execute tools to get real results for downstream actions
-    def _call(name: str, args: dict) -> dict:
-        fn, _, _ = TOOL_REGISTRY[name]
-        return fn(**args)
+    steps, final_answer = build_successful_steps()
 
     actions: list[AgentAction] = []
+    for step in steps:
+        actions.append(AgentAction("function_call", step.name, step.arguments))
 
-    # Skill 1: diagnose_order_risk
-    actions.append(AgentAction("function_call", "get_order", {"order_id": "SO-10482"}))
-    actions.append(AgentAction("function_call", "get_shipment_status", {"order_id": "SO-10482"}))
-
-    # Skill 2: assess_primary_fulfillment
-    actions.append(AgentAction("function_call", "get_inventory", {"sku": "SKU-4090", "dc_id": "DC-WEST-01"}))
-    actions.append(AgentAction("function_call", "get_fulfillment_capacity", {"dc_id": "DC-WEST-01", "date": "2026-04-18"}))
-
-    # Skill 3: evaluate_alternate_recovery_paths
-    actions.append(AgentAction("function_call", "find_alternate_inventory", {"sku": "SKU-4090", "region": "ALL"}))
-    east_transfer = _call("get_transfer_eta", {"from_dc": "DC-EAST-02", "to_dc": "DC-WEST-01", "sku": "SKU-4090", "qty": 900})
-    actions.append(AgentAction("function_call", "get_transfer_eta", {"from_dc": "DC-EAST-02", "to_dc": "DC-WEST-01", "sku": "SKU-4090", "qty": 900}))
-    actions.append(AgentAction("function_call", "get_supplier_expedite_options", {"sku": "SKU-4090", "qty": 900}))
-
-    # Skill 4: synthesize_recommendation (includes substitute path)
-    options = [
-        {"source": "DC-EAST-02", "description": "dc_transfer from DC-EAST-02",
-         "path_type": "dc_transfer", "lead_days": east_transfer["lead_days"],
-         "cost_per_unit": east_transfer["cost_per_unit"],
-         "total_cost": east_transfer["total_cost"],
-         "feasible": east_transfer["feasible"], "covers_full_qty": True},
-        {"source": "supplier:GlobalChip Express",
-         "description": "supplier_expedite from GlobalChip Express",
-         "path_type": "supplier_expedite", "lead_days": 7,
-         "cost_per_unit": 8.00, "total_cost": 7200.0,
-         "feasible": True, "covers_full_qty": True},
-        {"source": "supplier:FastSemi Direct",
-         "description": "supplier_expedite from FastSemi Direct",
-         "path_type": "supplier_expedite", "lead_days": 5,
-         "cost_per_unit": 12.00, "total_cost": 10800.0,
-         "feasible": True, "covers_full_qty": True},
-        {"source": "substitute:SKU-4090-B@DC-WEST-01",
-         "description": "substitute SKU-4090-B at DC-WEST-01",
-         "path_type": "substitute", "lead_days": 0,
-         "cost_per_unit": 0.0, "total_cost": 0.0,
-         "feasible": False, "covers_full_qty": False},
-    ]
-    scored = _call("score_recovery_options", {"options": options, "objective": "minimize_delay"})
-    actions.append(AgentAction("function_call", "score_recovery_options", {"options": options, "objective": "minimize_delay"}))
-
-    rec = _call("recommend_action", {"context": {
-        "best_option": scored["best_option"],
-        "order": {"order_id": "SO-10482", "sku": "SKU-4090", "qty": 1200, "committed_date": "2026-04-18"},
-        "objective": "minimize_delay",
-    }})
-    actions.append(AgentAction("function_call", "recommend_action", {"context": {
-        "best_option": scored["best_option"],
-        "order": {"order_id": "SO-10482", "sku": "SKU-4090", "qty": 1200, "committed_date": "2026-04-18"},
-        "objective": "minimize_delay",
-    }}))
-
-    # Terminal
-    import json
-    final_answer = {
-        "action": rec["action"],
-        "rationale": rec["rationale"],
-        "expected_delivery": rec["expected_delivery"],
-        "meets_committed_date": rec["meets_committed_date"],
-        "confidence": rec["confidence"],
-    }
     actions.append(AgentAction("message", content=json.dumps(final_answer)))
 
     return actions
@@ -403,84 +347,53 @@ def _build_successful_actions() -> list[AgentAction]:
 def _build_repair_actions() -> list[AgentAction]:
     """Build a scripted action sequence with repairs and a rejection.
 
-    Mirrors scripted_traces.build_repair_episode(): includes a rejected
-    plain-text output and two repaired tool calls. Unlike the scripted
-    traces approach, the rejection and repair handling happens in the
-    execution pipeline (process_agent_action) rather than being
-    pre-baked into Event objects.
+    Mirrors scripted_traces.build_repair_episode(): includes two repaired
+    tool calls with typo names. Unlike the scripted traces approach,
+    the repair handling happens in the execution pipeline
+    (process_agent_action) rather than being pre-baked into Event objects.
 
-    Note: Since the execution pipeline handles repairs at the
-    validate→repair level, we inject deliberate errors by using typo
-    tool names that the fuzzy matcher can correct.
+    Uses canonical step definitions and recovery options from
+    canonical_sequences to stay in sync with scripted_traces.
     """
-    from src.runtime.tools import TOOL_REGISTRY
-    import json
+    from src.rollouts.canonical_sequences import (
+        get_base_step_defs, build_recovery_options, build_recommend_args,
+        build_final_answer, _call_tool,
+    )
 
-    def _call(name: str, args: dict) -> dict:
-        fn, _, _ = TOOL_REGISTRY[name]
-        return fn(**args)
-
+    base = get_base_step_defs()
     actions: list[AgentAction] = []
 
     # Step 1: get_order (clean)
-    actions.append(AgentAction("function_call", "get_order", {"order_id": "SO-10482"}))
+    actions.append(AgentAction("function_call", base[0].name, base[0].arguments))
 
     # Step 2: get_shipment_status with typo -> fuzzy repair
-    # "get_shipmnt_status" is edit distance 1 from "get_shipment_status"
-    actions.append(AgentAction("function_call", "get_shipmnt_status", {"order_id": "SO-10482"}))
+    actions.append(AgentAction("function_call", "get_shipmnt_status", base[1].arguments))
 
-    # Steps 3-5: clean calls
-    actions.append(AgentAction("function_call", "get_inventory", {"sku": "SKU-4090", "dc_id": "DC-WEST-01"}))
-    actions.append(AgentAction("function_call", "get_fulfillment_capacity", {"dc_id": "DC-WEST-01", "date": "2026-04-18"}))
+    # Steps 3-4: clean calls
+    actions.append(AgentAction("function_call", base[2].name, base[2].arguments))
+    actions.append(AgentAction("function_call", base[3].name, base[3].arguments))
 
-    # Step 6: find_alternate_inventory with typo -> fuzzy repair
-    actions.append(AgentAction("function_call", "find_alternat_inventory", {"sku": "SKU-4090", "region": "ALL"}))
+    # Step 5: find_alternate_inventory with typo -> fuzzy repair
+    actions.append(AgentAction("function_call", "find_alternat_inventory", base[4].arguments))
 
-    # Steps 7-8: clean calls
-    east_transfer = _call("get_transfer_eta", {"from_dc": "DC-EAST-02", "to_dc": "DC-WEST-01", "sku": "SKU-4090", "qty": 900})
-    actions.append(AgentAction("function_call", "get_transfer_eta", {"from_dc": "DC-EAST-02", "to_dc": "DC-WEST-01", "sku": "SKU-4090", "qty": 900}))
-    actions.append(AgentAction("function_call", "get_supplier_expedite_options", {"sku": "SKU-4090", "qty": 900}))
+    # Steps 6-7: clean calls
+    actions.append(AgentAction("function_call", base[5].name, base[5].arguments))
+    actions.append(AgentAction("function_call", base[6].name, base[6].arguments))
 
-    # Steps 9-10: score and recommend (includes substitute path)
-    options = [
-        {"source": "DC-EAST-02", "description": "dc_transfer from DC-EAST-02",
-         "path_type": "dc_transfer", "lead_days": east_transfer["lead_days"],
-         "cost_per_unit": east_transfer["cost_per_unit"],
-         "total_cost": east_transfer["total_cost"],
-         "feasible": east_transfer["feasible"], "covers_full_qty": True},
-        {"source": "supplier:GlobalChip Express",
-         "description": "supplier_expedite from GlobalChip Express",
-         "path_type": "supplier_expedite", "lead_days": 7,
-         "cost_per_unit": 8.00, "total_cost": 7200.0,
-         "feasible": True, "covers_full_qty": True},
-        {"source": "substitute:SKU-4090-B@DC-WEST-01",
-         "description": "substitute SKU-4090-B at DC-WEST-01",
-         "path_type": "substitute", "lead_days": 0,
-         "cost_per_unit": 0.0, "total_cost": 0.0,
-         "feasible": False, "covers_full_qty": False},
-    ]
-    scored = _call("score_recovery_options", {"options": options, "objective": "minimize_delay"})
-    actions.append(AgentAction("function_call", "score_recovery_options", {"options": options, "objective": "minimize_delay"}))
+    # Steps 8-9: score and recommend (no third supplier in repair episode)
+    east_transfer = _call_tool(base[5].name, base[5].arguments)
+    options = build_recovery_options(east_transfer, include_third_supplier=False)
 
-    rec = _call("recommend_action", {"context": {
-        "best_option": scored["best_option"],
-        "order": {"order_id": "SO-10482", "sku": "SKU-4090", "qty": 1200, "committed_date": "2026-04-18"},
-        "objective": "minimize_delay",
-    }})
-    actions.append(AgentAction("function_call", "recommend_action", {"context": {
-        "best_option": scored["best_option"],
-        "order": {"order_id": "SO-10482", "sku": "SKU-4090", "qty": 1200, "committed_date": "2026-04-18"},
-        "objective": "minimize_delay",
-    }}))
+    scored = _call_tool("score_recovery_options", {"options": options, "objective": "minimize_delay"})
+    actions.append(AgentAction("function_call", "score_recovery_options",
+                               {"options": options, "objective": "minimize_delay"}))
+
+    rec_args = build_recommend_args(scored)
+    rec = _call_tool("recommend_action", rec_args)
+    actions.append(AgentAction("function_call", "recommend_action", rec_args))
 
     # Terminal
-    final_answer = {
-        "action": rec["action"],
-        "rationale": rec["rationale"],
-        "expected_delivery": rec["expected_delivery"],
-        "meets_committed_date": rec["meets_committed_date"],
-        "confidence": rec["confidence"],
-    }
+    final_answer = build_final_answer(rec)
     actions.append(AgentAction("message", content=json.dumps(final_answer)))
 
     return actions
@@ -544,89 +457,52 @@ def collect_environment_backed_rollout(
 
 
 def _build_reject_actions() -> list[AgentAction]:
-    """Build a scripted action sequence with an unrecoverable reject and a dependency violation.
+    """Build a scripted action sequence with an unrecoverable reject.
 
     This produces an episode with:
     - A completely unknown tool name that cannot be fuzzy-matched (rejected)
-    - A dependency violation (calling get_transfer_eta before find_alternate_inventory)
-    - Normal recovery completing the task after the failures
+    - Normal recovery completing the task after the failure
 
-    Unlike _build_repair_actions() which only generates typo-repairable calls,
-    this builder produces concrete rejects and dependency violations that
-    exercise the robustness-stage training signals.
+    Uses canonical step definitions and recovery options from
+    canonical_sequences to stay in sync with scripted_traces.
     """
-    from src.runtime.tools import TOOL_REGISTRY
-    import json
+    from src.rollouts.canonical_sequences import (
+        get_base_step_defs, build_recovery_options, build_recommend_args,
+        build_final_answer, _call_tool,
+    )
 
-    def _call(name: str, args: dict) -> dict:
-        fn, _, _ = TOOL_REGISTRY[name]
-        return fn(**args)
-
+    base = get_base_step_defs()
     actions: list[AgentAction] = []
 
     # Step 1: get_order (clean)
-    actions.append(AgentAction("function_call", "get_order", {"order_id": "SO-10482"}))
+    actions.append(AgentAction("function_call", base[0].name, base[0].arguments))
 
     # Step 2: completely unknown tool -> rejected (no fuzzy match possible)
     actions.append(AgentAction(
-        "function_call", "analyze_demand_forecast", {"order_id": "SO-10482"}
+        "function_call", "analyze_demand_forecast", {"order_id": "SO-10482"},
     ))
 
     # Step 3: get_shipment_status (clean, continuing after reject)
-    actions.append(AgentAction("function_call", "get_shipment_status", {"order_id": "SO-10482"}))
+    actions.append(AgentAction("function_call", base[1].name, base[1].arguments))
 
-    # Step 4-5: clean calls
-    actions.append(AgentAction("function_call", "get_inventory", {"sku": "SKU-4090", "dc_id": "DC-WEST-01"}))
-    actions.append(AgentAction("function_call", "get_fulfillment_capacity", {"dc_id": "DC-WEST-01", "date": "2026-04-18"}))
+    # Steps 4-7: clean calls
+    for i in range(2, 7):
+        actions.append(AgentAction("function_call", base[i].name, base[i].arguments))
 
-    # Step 6: find_alternate_inventory (clean)
-    actions.append(AgentAction("function_call", "find_alternate_inventory", {"sku": "SKU-4090", "region": "ALL"}))
+    # Steps 8-9: score and recommend (no third supplier in reject episode)
+    east_transfer = _call_tool(base[5].name, base[5].arguments)
+    options = build_recovery_options(east_transfer, include_third_supplier=False)
 
-    # Step 7-8: clean calls
-    east_transfer = _call("get_transfer_eta", {"from_dc": "DC-EAST-02", "to_dc": "DC-WEST-01", "sku": "SKU-4090", "qty": 900})
-    actions.append(AgentAction("function_call", "get_transfer_eta", {"from_dc": "DC-EAST-02", "to_dc": "DC-WEST-01", "sku": "SKU-4090", "qty": 900}))
-    actions.append(AgentAction("function_call", "get_supplier_expedite_options", {"sku": "SKU-4090", "qty": 900}))
+    scored = _call_tool("score_recovery_options", {"options": options, "objective": "minimize_delay"})
+    actions.append(AgentAction("function_call", "score_recovery_options",
+                               {"options": options, "objective": "minimize_delay"}))
 
-    # Steps 9-10: score and recommend (includes substitute)
-    options = [
-        {"source": "DC-EAST-02", "description": "dc_transfer from DC-EAST-02",
-         "path_type": "dc_transfer", "lead_days": east_transfer["lead_days"],
-         "cost_per_unit": east_transfer["cost_per_unit"],
-         "total_cost": east_transfer["total_cost"],
-         "feasible": east_transfer["feasible"], "covers_full_qty": True},
-        {"source": "supplier:GlobalChip Express",
-         "description": "supplier_expedite from GlobalChip Express",
-         "path_type": "supplier_expedite", "lead_days": 7,
-         "cost_per_unit": 8.00, "total_cost": 7200.0,
-         "feasible": True, "covers_full_qty": True},
-        {"source": "substitute:SKU-4090-B@DC-WEST-01",
-         "description": "substitute SKU-4090-B at DC-WEST-01",
-         "path_type": "substitute", "lead_days": 0,
-         "cost_per_unit": 0.0, "total_cost": 0.0,
-         "feasible": False, "covers_full_qty": False},
-    ]
-    scored = _call("score_recovery_options", {"options": options, "objective": "minimize_delay"})
-    actions.append(AgentAction("function_call", "score_recovery_options", {"options": options, "objective": "minimize_delay"}))
-
-    rec = _call("recommend_action", {"context": {
-        "best_option": scored["best_option"],
-        "order": {"order_id": "SO-10482", "sku": "SKU-4090", "qty": 1200, "committed_date": "2026-04-18"},
-        "objective": "minimize_delay",
-    }})
-    actions.append(AgentAction("function_call", "recommend_action", {"context": {
-        "best_option": scored["best_option"],
-        "order": {"order_id": "SO-10482", "sku": "SKU-4090", "qty": 1200, "committed_date": "2026-04-18"},
-        "objective": "minimize_delay",
-    }}))
+    rec_args = build_recommend_args(scored)
+    rec = _call_tool("recommend_action", rec_args)
+    actions.append(AgentAction("function_call", "recommend_action", rec_args))
 
     # Terminal
-    final_answer = {
-        "action": rec["action"],
-        "rationale": rec["rationale"],
-        "expected_delivery": rec["expected_delivery"],
-        "meets_committed_date": rec["meets_committed_date"],
-        "confidence": rec["confidence"],
-    }
+    final_answer = build_final_answer(rec)
     actions.append(AgentAction("message", content=json.dumps(final_answer)))
 
     return actions

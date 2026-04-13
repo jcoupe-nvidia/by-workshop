@@ -371,7 +371,7 @@ def run_grpo_notebook(
             stacklevel=2,
         )
         try:
-            live_metrics = _live_train(datum_specs, stage_config)
+            live_metrics = _live_train(stage_config)
             train_metrics.update(live_metrics)
         except Exception as exc:
             effective_dry_run = True
@@ -405,7 +405,6 @@ def run_grpo_notebook(
 
 
 def _live_train(
-    datum_specs: list[dict[str, Any]],
     stage_config: StageConfig,
 ) -> dict[str, float]:
     """Run a real NeMo RL GRPO training step (fresh rollouts, NOT replay).
@@ -492,7 +491,6 @@ def _live_train(
 
     return {
         "step": config["grpo"]["max_num_steps"],
-        "num_datum_specs": len(datum_specs),
         "training_backend": "nemo_rl",
     }
 

@@ -91,20 +91,25 @@ class TrajectoryEvaluation:
 
 # -- Helpers ---------------------------------------------------------------
 
-def _extract_order_id(episode: Episode) -> str:
+def _extract_order_id(episode: Episode) -> tuple[str, bool]:
     """Best-effort extraction of order_id from an Episode's tool calls.
 
     Looks at get_order calls first; falls back to task_id, then "SO-10482".
+
+    Returns:
+        (order_id, used_fallback) where used_fallback is True when the
+        order_id could not be determined from tool calls and a default
+        was used.
     """
     for event in episode.tool_calls:
         payload = event.payload
         if isinstance(payload, ToolCallPayload) and payload.tool_name == "get_order":
             oid = payload.arguments.get("order_id")
             if oid:
-                return str(oid)
+                return str(oid), False
     if episode.task_id and episode.task_id.startswith("SO-"):
-        return episode.task_id
-    return "SO-10482"
+        return episode.task_id, False
+    return "SO-10482", True
 
 
 # -- Individual evaluators -------------------------------------------------
@@ -178,7 +183,7 @@ def eval_tool_accuracy(episode: Episode) -> DimensionScore:
     if not tool_names:
         return DimensionScore("tool_accuracy", 0.0, 1.0, "No valid tool calls.")
 
-    order_id = _extract_order_id(episode)
+    order_id, used_fallback = _extract_order_id(episode)
     expected_args = get_expected_arguments(order_id)
 
     checked = 0
@@ -205,12 +210,14 @@ def eval_tool_accuracy(episode: Episode) -> DimensionScore:
             correct += 1
 
     if checked == 0:
-        return DimensionScore("tool_accuracy", 1.0, 1.0, "No checkable tools called.")
+        return DimensionScore("tool_accuracy", 0.5, 1.0, "No checkable tools called — neutral score.")
 
     score = correct / checked
     details = f"{correct}/{checked} tools had correct arguments."
     if mismatches:
         details += f" Mismatches: {mismatches}"
+    if used_fallback:
+        details += " (WARNING: order_id fell back to SO-10482)"
     return DimensionScore("tool_accuracy", round(score, 3), 1.0, details)
 
 
@@ -258,8 +265,9 @@ def eval_task_success(episode: Episode) -> DimensionScore:
     single source of truth for task success — then maps the result to a
     0-1 score with bonus for optional answer fields.
     """
-    order_id = _extract_order_id(episode)
+    order_id, used_fallback = _extract_order_id(episode)
     scored_options = _extract_scored_options(episode)
+    fallback_warning = " (WARNING: order_id fell back to SO-10482)" if used_fallback else ""
 
     facts = task_success_facts(
         final_answer=episode.final_answer,
@@ -272,7 +280,7 @@ def eval_task_success(episode: Episode) -> DimensionScore:
         if episode.final_answer is None or not episode.is_complete:
             return DimensionScore(
                 "task_success", 0.0, 1.0,
-                f"Agent did not complete: {facts['reason']}.",
+                f"Agent did not complete: {facts['reason']}.{fallback_warning}",
             )
         present_count = len(
             set(episode.final_answer.keys()) & {"action", "rationale"}
@@ -280,27 +288,30 @@ def eval_task_success(episode: Episode) -> DimensionScore:
         score = present_count / 2
         return DimensionScore(
             "task_success", round(score, 3), 1.0,
-            f"Final answer missing fields: {facts['reason']}.",
+            f"Final answer missing fields: {facts['reason']}.{fallback_warning}",
         )
 
-    # Structural fields present — build composite score
-    base_score = 0.7
-
+    # Structural fields present — gate base score on action correctness
+    # so wrong-action answers are visibly below the pass threshold.
     if facts["action_correct"]:
-        base_score += 0.15
+        base_score = 0.70
+    else:
+        base_score = 0.30
+
     if facts["grounded"]:
-        base_score += 0.05
+        base_score += 0.15
     elif scored_options is not None:
-        pass  # no bonus, but no penalty at the eval layer
+        pass
 
     answer = episode.final_answer or {}
     has_confidence = "confidence" in answer
     has_delivery = "expected_delivery" in answer
-    optional_score = 0.1 * sum([has_confidence, has_delivery]) / 2
+    optional_score = 0.15 * sum([has_confidence, has_delivery]) / 2
 
     score = min(1.0, base_score + optional_score)
 
     details = f"Valid final answer with action='{answer.get('action', '?')}'."
+    details += f" Canonical success={facts['success']}."
     if facts["action_correct"]:
         details += " Action matches expected."
     else:
@@ -319,7 +330,7 @@ def eval_task_success(episode: Episode) -> DimensionScore:
             extras.append("expected_delivery")
         details += f" Missing optional: {extras}."
 
-    return DimensionScore("task_success", round(score, 3), 1.0, details)
+    return DimensionScore("task_success", round(score, 3), 1.0, details + fallback_warning)
 
 
 def _extract_scored_options(episode: Episode) -> list[dict[str, Any]] | None:
@@ -389,7 +400,7 @@ def eval_efficiency(episode: Episode) -> DimensionScore:
     the raw event count (which includes results, thoughts, etc.) and
     should not be compared against a tool-call count.
     """
-    order_id = _extract_order_id(episode)
+    order_id, used_fallback = _extract_order_id(episode)
     optimal_seq = get_optimal_tool_sequence(order_id)
     optimal_count = len(optimal_seq)
 
@@ -408,6 +419,8 @@ def eval_efficiency(episode: Episode) -> DimensionScore:
         f"(optimal for {order_id}: {optimal_count}). "
         f"Efficiency ratio: {score:.2f}."
     )
+    if used_fallback:
+        details += " (WARNING: order_id fell back to SO-10482)"
     return DimensionScore("efficiency", round(score, 3), 1.0, details)
 
 

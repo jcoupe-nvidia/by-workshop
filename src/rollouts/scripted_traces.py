@@ -16,6 +16,14 @@ Usage::
 """
 from __future__ import annotations
 
+from src.rollouts.canonical_sequences import (
+    build_successful_steps,
+    get_base_step_defs,
+    build_recovery_options,
+    build_recommend_args,
+    build_final_answer,
+    _call_tool,
+)
 from src.rollouts.trace_types import (
     Episode,
     EpisodeMetrics,
@@ -28,18 +36,11 @@ from src.rollouts.trace_types import (
     RejectPayload,
     TerminalOutcomePayload,
 )
-from src.runtime.tools import TOOL_REGISTRY
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def _call_tool(name: str, arguments: dict) -> dict:
-    """Execute a tool from the registry and return its result."""
-    fn, _, _ = TOOL_REGISTRY[name]
-    return fn(**arguments)
-
 
 def _tool_call_event(
     step: int,
@@ -80,92 +81,18 @@ def build_successful_episode() -> Episode:
         A raw Episode (no rewards) with 9 tool calls ending in a
         final-answer recommendation.
     """
+    steps, final_answer = build_successful_steps()
+
     events: list[Event] = []
     step = 0
 
-    def call(name: str, args: dict, thought: str) -> dict:
-        nonlocal step
-        result = _call_tool(name, args)
-        events.append(_tool_call_event(step, name, args, thought))
+    for ts in steps:
+        result = _call_tool(ts.name, ts.arguments)
+        events.append(_tool_call_event(step, ts.name, ts.arguments, ts.thought))
         step += 1
-        events.append(_tool_result_event(step, name, result))
+        events.append(_tool_result_event(step, ts.name, result))
         step += 1
-        return result
 
-    # Skill 1: diagnose_order_risk
-    call("get_order", {"order_id": "SO-10482"},
-         "Start by looking up the order details.")
-    call("get_shipment_status", {"order_id": "SO-10482"},
-         "Check current shipment status to assess risk.")
-
-    # Skill 2: assess_primary_fulfillment
-    call("get_inventory", {"sku": "SKU-4090", "dc_id": "DC-WEST-01"},
-         "Check inventory at primary DC.")
-    call("get_fulfillment_capacity", {"dc_id": "DC-WEST-01", "date": "2026-04-18"},
-         "Check fulfillment capacity at source DC on committed date.")
-
-    # Skill 3: evaluate_alternate_recovery_paths
-    call("find_alternate_inventory", {"sku": "SKU-4090", "region": "ALL"},
-         "Primary DC has only 300 of 1200 needed. Search all DCs.")
-    east_transfer = call(
-        "get_transfer_eta",
-        {"from_dc": "DC-EAST-02", "to_dc": "DC-WEST-01",
-         "sku": "SKU-4090", "qty": 900},
-        "DC-EAST-02 has 1000 available. Get transfer ETA for 900-unit shortfall.",
-    )
-    supplier_opts = call(
-        "get_supplier_expedite_options",
-        {"sku": "SKU-4090", "qty": 900},
-        "Check supplier expedite options for the shortfall.",
-    )
-
-    # Skill 4: synthesize_recommendation
-    options = [
-        {"source": "DC-EAST-02", "description": "dc_transfer from DC-EAST-02",
-         "path_type": "dc_transfer", "lead_days": east_transfer["lead_days"],
-         "cost_per_unit": east_transfer["cost_per_unit"],
-         "total_cost": east_transfer["total_cost"],
-         "feasible": east_transfer["feasible"], "covers_full_qty": True},
-        {"source": "supplier:GlobalChip Express",
-         "description": "supplier_expedite from GlobalChip Express",
-         "path_type": "supplier_expedite", "lead_days": 7,
-         "cost_per_unit": 8.00, "total_cost": 7200.0,
-         "feasible": True, "covers_full_qty": True},
-        {"source": "supplier:FastSemi Direct",
-         "description": "supplier_expedite from FastSemi Direct",
-         "path_type": "supplier_expedite", "lead_days": 5,
-         "cost_per_unit": 12.00, "total_cost": 10800.0,
-         "feasible": True, "covers_full_qty": True},
-        {"source": "substitute:SKU-4090-B@DC-WEST-01",
-         "description": "substitute SKU-4090-B at DC-WEST-01",
-         "path_type": "substitute", "lead_days": 0,
-         "cost_per_unit": 0.0, "total_cost": 0.0,
-         "feasible": False, "covers_full_qty": False},
-    ]
-    scored = call(
-        "score_recovery_options",
-        {"options": options, "objective": "minimize_delay"},
-        "Score all recovery options including substitute SKU.",
-    )
-    rec = call(
-        "recommend_action",
-        {"context": {
-            "best_option": scored["best_option"],
-            "order": {"order_id": "SO-10482", "sku": "SKU-4090",
-                      "qty": 1200, "committed_date": "2026-04-18"},
-            "objective": "minimize_delay",
-        }},
-        "Produce the final recommendation based on scored options.",
-    )
-
-    # Terminal outcome
-    final_answer = {
-        "action": rec["action"],
-        "rationale": rec["rationale"],
-        "expected_delivery": rec["expected_delivery"],
-        "meets_committed_date": rec["meets_committed_date"],
-        "confidence": rec["confidence"],
-    }
     terminal = TerminalOutcomePayload(
         reason="final_answer",
         final_answer=final_answer,
@@ -211,6 +138,7 @@ def build_repair_episode() -> Episode:
         A raw Episode (no rewards) with 9 valid tool calls, 1 rejection,
         and 2 successful repairs.
     """
+    base = get_base_step_defs()
     events: list[Event] = []
     step = 0
 
@@ -222,7 +150,6 @@ def build_repair_episode() -> Episode:
     ) -> dict:
         nonlocal step
         result = _call_tool(name, args)
-        # If this was a repaired call, record the repair event first
         if repairs:
             events.append(Event(
                 event_type=EventType.TOOL_REPAIR_ATTEMPT,
@@ -242,7 +169,7 @@ def build_repair_episode() -> Episode:
         return result
 
     # Step 1: get_order (clean)
-    call("get_order", {"order_id": "SO-10482"},
+    call(base[0].name, base[0].arguments,
          "Start by looking up the order details.")
 
     # Step 2: model emits plain text instead of JSON -> REJECTED
@@ -267,54 +194,33 @@ def build_repair_episode() -> Episode:
     step += 1
 
     # Step 3: get_shipment_status (repaired -- trailing comma)
-    call("get_shipment_status", {"order_id": "SO-10482"},
+    call(base[1].name, base[1].arguments,
          "Check shipping status after retry.",
          repairs=["fixed_trailing_commas"])
 
     # Step 4: get_inventory (clean)
-    call("get_inventory", {"sku": "SKU-4090", "dc_id": "DC-WEST-01"},
+    call(base[2].name, base[2].arguments,
          "Check source DC inventory.")
 
     # Step 5: get_fulfillment_capacity (clean)
-    call("get_fulfillment_capacity", {"dc_id": "DC-WEST-01", "date": "2026-04-18"},
+    call(base[3].name, base[3].arguments,
          "Check capacity at source DC.")
 
     # Step 6: find_alternate_inventory (repaired -- tool name typo)
-    call("find_alternate_inventory", {"sku": "SKU-4090", "region": "ALL"},
+    call(base[4].name, base[4].arguments,
          "Search alternates. Model originally wrote 'find_alternat_inventory'.",
          repairs=["corrected_tool_name:find_alternat_inventory->find_alternate_inventory"])
 
     # Step 7: get_transfer_eta (clean)
-    east_transfer = call(
-        "get_transfer_eta",
-        {"from_dc": "DC-EAST-02", "to_dc": "DC-WEST-01",
-         "sku": "SKU-4090", "qty": 900},
-        "Get transfer ETA from DC-EAST-02.",
-    )
+    east_transfer = call(base[5].name, base[5].arguments,
+                         "Get transfer ETA from DC-EAST-02.")
 
     # Step 8: get_supplier_expedite_options (clean)
-    call("get_supplier_expedite_options",
-         {"sku": "SKU-4090", "qty": 900},
+    call(base[6].name, base[6].arguments,
          "Check supplier expedite for the shortfall.")
 
     # Step 9: score_recovery_options (clean, includes substitute)
-    options = [
-        {"source": "DC-EAST-02", "description": "dc_transfer from DC-EAST-02",
-         "path_type": "dc_transfer", "lead_days": east_transfer["lead_days"],
-         "cost_per_unit": east_transfer["cost_per_unit"],
-         "total_cost": east_transfer["total_cost"],
-         "feasible": east_transfer["feasible"], "covers_full_qty": True},
-        {"source": "supplier:GlobalChip Express",
-         "description": "supplier_expedite from GlobalChip Express",
-         "path_type": "supplier_expedite", "lead_days": 7,
-         "cost_per_unit": 8.00, "total_cost": 7200.0,
-         "feasible": True, "covers_full_qty": True},
-        {"source": "substitute:SKU-4090-B@DC-WEST-01",
-         "description": "substitute SKU-4090-B at DC-WEST-01",
-         "path_type": "substitute", "lead_days": 0,
-         "cost_per_unit": 0.0, "total_cost": 0.0,
-         "feasible": False, "covers_full_qty": False},
-    ]
+    options = build_recovery_options(east_transfer, include_third_supplier=False)
     scored = call(
         "score_recovery_options",
         {"options": options, "objective": "minimize_delay"},
@@ -322,25 +228,12 @@ def build_repair_episode() -> Episode:
     )
 
     # Step 10: recommend_action (clean)
-    rec = call(
-        "recommend_action",
-        {"context": {
-            "best_option": scored["best_option"],
-            "order": {"order_id": "SO-10482", "sku": "SKU-4090",
-                      "qty": 1200, "committed_date": "2026-04-18"},
-            "objective": "minimize_delay",
-        }},
-        "Produce final recommendation.",
-    )
+    rec_args = build_recommend_args(scored)
+    rec = call("recommend_action", rec_args,
+               "Produce final recommendation.")
 
     # Terminal outcome
-    final_answer = {
-        "action": rec["action"],
-        "rationale": rec["rationale"],
-        "expected_delivery": rec["expected_delivery"],
-        "meets_committed_date": rec["meets_committed_date"],
-        "confidence": rec["confidence"],
-    }
+    final_answer = build_final_answer(rec)
     terminal = TerminalOutcomePayload(
         reason="final_answer",
         final_answer=final_answer,

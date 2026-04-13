@@ -356,10 +356,12 @@ def try_repair(
     if "tool_call" not in parsed and "final_answer" not in parsed:
         # Check if the model emitted a flat tool call without the wrapper
         if "name" in parsed and "arguments" in parsed:
-            parsed = {"tool_call": {"name": parsed["name"], "arguments": parsed["arguments"]}}
-            if "thought" in parsed.get("tool_call", {}).get("arguments", {}):
-                # Don't let thought leak into arguments
-                pass
+            wrapped_args = dict(parsed["arguments"])
+            thought_value = wrapped_args.pop("thought", None)
+            parsed = {"tool_call": {"name": parsed["name"], "arguments": wrapped_args}}
+            if thought_value is not None:
+                parsed["thought"] = thought_value
+                repairs.append("moved_thought_from_arguments")
             repairs.append("wrapped_flat_tool_call")
         else:
             return FallbackResult(

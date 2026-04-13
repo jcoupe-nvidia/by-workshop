@@ -54,6 +54,14 @@ TOOL_COMPLETES_SUBGOAL: dict[str, Subgoal] = {
     "recommend_action": Subgoal.RECOMMENDATION_SYNTHESIZED,
 }
 
+# All tools that must have been called before a subgoal can be marked complete.
+SUBGOAL_REQUIRED_TOOLS: dict[Subgoal, set[str]] = {
+    Subgoal.ORDER_DIAGNOSED: {"get_order", "get_shipment_status"},
+    Subgoal.PRIMARY_ASSESSED: {"get_inventory", "get_fulfillment_capacity"},
+    Subgoal.ALTERNATES_EVALUATED: {"find_alternate_inventory", "get_supplier_expedite_options"},
+    Subgoal.RECOMMENDATION_SYNTHESIZED: {"score_recovery_options", "recommend_action"},
+}
+
 # Which tools contribute to which subgoals (all tools in a workflow)
 TOOL_TO_SUBGOAL: dict[str, Subgoal] = {
     "get_order": Subgoal.ORDER_DIAGNOSED,

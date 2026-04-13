@@ -282,8 +282,16 @@ def run_skill_command(
         if info.name != skill_name and skill_dir.name != skill_name:
             continue
 
-        # Security: only allow executing files that exist in the skill dir
-        script_path = skill_dir / command
+        # Security: resolve path and block traversal outside the skill dir
+        script_path = (skill_dir / command).resolve()
+        if not script_path.is_relative_to(skill_dir.resolve()):
+            return CommandResult(
+                skill_name=skill_name,
+                command=command,
+                return_code=1,
+                stdout="",
+                stderr=f"Path traversal detected: '{command}' resolves outside skill directory.",
+            )
         if not script_path.exists() or not script_path.is_file():
             return CommandResult(
                 skill_name=skill_name,

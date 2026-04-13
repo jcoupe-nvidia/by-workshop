@@ -58,12 +58,26 @@ def _compute_task_success(episode: Episode) -> int:
     final_answer = None
     if episode.terminal and hasattr(episode.terminal, 'final_answer'):
         final_answer = episode.terminal.final_answer
+    scored_options = _extract_scored_options_for_training(episode)
     success_info = task_success_facts(
         final_answer=final_answer,
         order_id=episode.task_id,
+        scored_options=scored_options,
         is_complete=episode.is_complete,
     )
     return 1 if success_info["success"] else 0
+
+
+def _extract_scored_options_for_training(episode: Episode) -> list[dict] | None:
+    """Extract scored recovery options from score_recovery_options tool result."""
+    for event in episode.events:
+        if event.event_type == EventType.TOOL_RESULT:
+            payload = event.payload
+            if isinstance(payload, ToolResultPayload) and payload.tool_name == "score_recovery_options":
+                result = payload.result
+                if isinstance(result, dict):
+                    return result.get("options", result.get("scored", []))
+    return None
 
 
 # ---------------------------------------------------------------------------

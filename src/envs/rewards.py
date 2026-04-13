@@ -86,7 +86,7 @@ def get_expected_arguments(order_id: str) -> dict[str, dict[str, Any]]:
     shortfall = max(0, qty - available)
     expedite_qty = shortfall if shortfall > 0 else qty
 
-    return {
+    expected: dict[str, dict[str, Any]] = {
         "get_order": {"order_id": order_id},
         "get_shipment_status": {"order_id": order_id},
         "get_inventory": {"sku": sku, "dc_id": source_dc},
@@ -94,6 +94,19 @@ def get_expected_arguments(order_id: str) -> dict[str, dict[str, Any]]:
         "find_alternate_inventory": {"sku": sku, "region": "ALL"},
         "get_supplier_expedite_options": {"sku": sku, "qty": expedite_qty},
     }
+
+    # get_transfer_eta: statically-known args (from_dc depends on runtime
+    # discovery so is omitted; checked partially).
+    expected["get_transfer_eta"] = {
+        "to_dc": source_dc,
+        "sku": sku,
+        "qty": shortfall if shortfall > 0 else qty,
+    }
+
+    # score_recovery_options: check the objective argument
+    expected["score_recovery_options"] = {"objective": "minimize_delay"}
+
+    return expected
 
 
 # Backward-compatible alias: default to SO-10482 for existing call sites
@@ -114,6 +127,31 @@ _FULL_TOOL_SEQUENCE = [
     "score_recovery_options",
     "recommend_action",
 ]
+
+# Exact match with alias support for common model phrasings
+_ACTION_ALIASES: dict[str, set[str]] = {
+    "transfer": {"transfer", "dc_transfer", "inter_dc_transfer"},
+    "supplier_expedite": {"supplier_expedite", "expedite", "expedite_from_supplier"},
+    "partial_fulfillment": {"partial_fulfillment", "partial_fulfill", "partial"},
+    "fulfill_from_source": {"fulfill_from_source", "fulfill", "no_action_needed", "on_track"},
+    "substitute": {"substitute", "sku_substitute", "substitute_sku"},
+    "escalate": {"escalate", "manual_review", "escalate_to_planner"},
+}
+
+
+def _action_matches(expected: str, recommended: str) -> bool:
+    """Check if recommended action matches expected, allowing known aliases.
+
+    Checks the full string and each whitespace-delimited token against the
+    alias set.  This handles description-style outputs like
+    ``"dc_transfer from DC-EAST-02"`` while rejecting false positives like
+    ``"no_transfer_needed"`` (which is a single token not in any alias set).
+    """
+    aliases = _ACTION_ALIASES.get(expected, {expected})
+    if recommended in aliases:
+        return True
+    return any(token in aliases for token in recommended.split())
+
 
 # Per-scenario expected optimal action derived from scenario_data.py comments.
 EXPECTED_ACTION: dict[str, str] = {
@@ -234,7 +272,7 @@ def task_success_facts(
     recommended = str(final_answer.get("action", "")).lower().strip()
     action_correct = False
     if expected != "unknown" and recommended:
-        action_correct = expected in recommended or recommended in expected
+        action_correct = _action_matches(expected, recommended)
 
     # Grounding: does the recommended action appear in scored options?
     grounded = False
@@ -327,6 +365,7 @@ def compute_step_reward(
     state: LateOrderEnvState,
     tool_arguments: dict[str, Any] | None = None,
     was_repaired: bool = False,
+    pre_completed_subgoals: set[Subgoal] | None = None,
 ) -> RewardSignal:
     """Compute the dense reward signal for one environment step.
 
@@ -335,11 +374,21 @@ def compute_step_reward(
         state: The environment state after the transition.
         tool_arguments: The arguments the agent provided (for accuracy checking).
         was_repaired: Whether this step required fallback repair.
+        pre_completed_subgoals: Subgoals completed before this step's
+            transition.  When provided, ``correct_tool`` is evaluated
+            against this pre-transition snapshot so that subgoal-completing
+            tools are credited correctly.
 
     Returns:
         RewardSignal with decomposed component scores.
     """
     signal = RewardSignal()
+
+    # Use pre-transition subgoals for correct_tool evaluation when available
+    completed_for_eval = (
+        pre_completed_subgoals if pre_completed_subgoals is not None
+        else state.completed_subgoals
+    )
 
     # -- Valid call component --
     if step.valid:
@@ -363,13 +412,12 @@ def compute_step_reward(
         signal.dependency_satisfied = 0.0
 
     if not step.valid:
-        # Invalid steps get no credit for other components
         return signal
 
     # -- Correct tool for current state --
     next_subgoal = None
     for sg in SUBGOAL_ORDER:
-        if sg not in state.completed_subgoals:
+        if sg not in completed_for_eval:
             next_subgoal = sg
             break
 
@@ -382,7 +430,7 @@ def compute_step_reward(
         else:
             # Check if it's a tool for a future subgoal (premature but not wrong)
             for future_sg in SUBGOAL_ORDER:
-                if future_sg in state.completed_subgoals:
+                if future_sg in completed_for_eval:
                     continue
                 if step.tool_name in CORRECT_TOOLS_BY_SUBGOAL.get(future_sg, set()):
                     signal.correct_tool = 0.3  # premature but valid
@@ -499,8 +547,12 @@ def compute_terminal_reward(
         signal.penalties.append("hallucinated_conclusion")
         base_score -= 0.3
 
-    # Check subgoal coverage
-    subgoal_ratio = len(state.completed_subgoals) / len(SUBGOAL_ORDER)
+    # Check subgoal coverage (scenario-specific expected count so false-alarm
+    # scenarios are not penalized for correctly skipping ALTERNATES_EVALUATED)
+    from src.envs.state import TOOL_TO_SUBGOAL
+    optimal_seq = get_optimal_tool_sequence(state.order_id)
+    expected_subgoals = len({TOOL_TO_SUBGOAL[t] for t in optimal_seq if t in TOOL_TO_SUBGOAL})
+    subgoal_ratio = len(state.completed_subgoals) / expected_subgoals if expected_subgoals > 0 else 1.0
     if subgoal_ratio < 1.0:
         penalty = (1.0 - subgoal_ratio) * 0.3
         base_score -= penalty
@@ -512,7 +564,7 @@ def compute_terminal_reward(
     expected = get_expected_action(state.order_id)
     recommended = str(answer.get("action", "")).lower().strip()
     if expected != "unknown" and recommended:
-        if expected in recommended or recommended in expected:
+        if _action_matches(expected, recommended):
             base_score += 0.2
         else:
             base_score -= 0.1

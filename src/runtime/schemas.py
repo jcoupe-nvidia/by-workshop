@@ -90,9 +90,14 @@ def extract_json(raw: str) -> str | None:
     """
     text = raw.strip()
 
-    # Try direct parse first
+    # Try direct parse first — but only return the full text if it's valid JSON.
+    # If it starts with '{' but has trailing prose, fall through to brace matching.
     if text.startswith("{"):
-        return text
+        try:
+            json.loads(text)
+            return text
+        except json.JSONDecodeError:
+            pass
 
     # Try extracting from markdown code fence
     fence_match = re.search(r"```(?:json)?\s*\n?(\{.*?\})\s*\n?```", text, re.DOTALL)

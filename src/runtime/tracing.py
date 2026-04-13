@@ -264,4 +264,13 @@ class EpisodeRecorder:
         )
         if hasattr(self, "_metadata"):
             ep.metadata.update(self._metadata)
+
+        from src.rollouts.trace_types import ASYNC_META_KEYS, ASYNC_META_REPLAY_STATUS
+        for key in ASYNC_META_KEYS:
+            if key not in ep.metadata:
+                if key == ASYNC_META_REPLAY_STATUS:
+                    ep.metadata[key] = "accepted"
+                else:
+                    ep.metadata[key] = 0
+
         return ep

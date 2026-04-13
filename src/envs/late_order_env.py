@@ -141,10 +141,15 @@ class LateOrderRecoveryEnv:
         Returns:
             StepResult with transition metadata.
         """
+        pre_subgoals = set(self.state.completed_subgoals)
         result = apply_tool_call(self.state, tool_name, tool_arguments, tool_result)
 
-        # Compute and store the step reward
-        reward = compute_step_reward(result, self.state, tool_arguments, was_repaired)
+        # Compute and store the step reward (use pre-transition subgoals so
+        # subgoal-completing tools are evaluated against their own subgoal)
+        reward = compute_step_reward(
+            result, self.state, tool_arguments, was_repaired,
+            pre_completed_subgoals=pre_subgoals,
+        )
         self._step_rewards.append(reward)
         self._step_results.append(result)
 
@@ -170,6 +175,9 @@ class LateOrderRecoveryEnv:
         reward = compute_step_reward(result, self.state)
         self._step_rewards.append(reward)
         self._step_results.append(result)
+
+        if should_force_terminate(self.state):
+            self.terminate("max_iterations")
 
         return result
 

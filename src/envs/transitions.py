@@ -32,6 +32,7 @@ from src.envs.state import (
     SUBGOAL_ORDER,
     TOOL_COMPLETES_SUBGOAL,
     TOOL_TO_SUBGOAL,
+    SUBGOAL_REQUIRED_TOOLS,
 )
 from src.envs.state import TOOL_DEPENDENCIES
 
@@ -163,14 +164,17 @@ def _check_subgoal_completion(
     """Check if calling this tool completes a subgoal.
 
     A subgoal is complete when its final tool has been called AND all
-    prior tools in the subgoal's workflow have also been called.
+    required constituent tools in the subgoal's workflow have been called.
     """
     subgoal = TOOL_COMPLETES_SUBGOAL.get(tool_name)
     if subgoal is None:
         return None
 
-    # Already completed?
     if subgoal in state.completed_subgoals:
+        return None
+
+    required = SUBGOAL_REQUIRED_TOOLS.get(subgoal, set())
+    if not required.issubset(state.tools_called_set):
         return None
 
     state.completed_subgoals.add(subgoal)
