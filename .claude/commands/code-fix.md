@@ -28,7 +28,7 @@ Before making changes:
 - Preserve ownership boundaries from `documents/RL_ARCHITECTURE.md` — especially the layer boundary table and anti-patterns list.
 - Avoid speculative refactors not needed to resolve the findings.
 
-To avoid filling the context window, delegate fixes to focused subagents. Before spawning any subagent, analyze the findings for dependencies:
+To avoid filling the context window, delegate fixes to focused subagents. Run subagents **sequentially, one at a time** — parallel subagent execution causes file conflicts when multiple agents edit overlapping files. Before spawning any subagent, analyze the findings for dependencies:
 
 1. Parse `code-review-issues.md` to build a list of individual findings (each heading or numbered item that describes a distinct problem).
 2. Skip findings that are open questions, duplicates, or overlap with items already tracked in `future-work-list.md`.
@@ -38,8 +38,9 @@ To avoid filling the context window, delegate fixes to focused subagents. Before
    - One finding is about producing data (e.g., adding a diagnostic field, changing a return type) and another is about consuming that data (e.g., using the field downstream, adjusting reward logic).
    - They share a logical precondition — for example, fixing session isolation must land before fixing verify() guards that assume isolated sessions.
    - Fixing them independently would create merge conflicts or contradictory code.
-4. Group dependent findings into clusters. Each cluster becomes one subagent. Independent findings that belong to no cluster each get their own subagent.
-5. For each subagent (whether single-issue or multi-issue cluster), the prompt must include:
+4. Group dependent findings into clusters. Each cluster becomes one subagent.
+5. Order the clusters by dependency: if cluster A changes a signature or contract that cluster B consumes, run A first. Within each cluster, the subagent handles internal ordering.
+6. For each subagent (whether single-issue or multi-issue cluster), the prompt must include:
    - The full text of every finding assigned to it (severity, affected files, evidence, and recommended fix).
    - For clusters: an explicit note on why the findings are grouped and what ordering constraints exist between them.
    - Instructions to read the reference docs relevant to the affected files' layer before making changes:
@@ -49,7 +50,7 @@ To avoid filling the context window, delegate fixes to focused subagents. Before
      - `src/training/` → `documents/RL_ARCHITECTURE.md` §§ Design Practices, On-Policy Corrections.
      - `src/eval/`, `src/scenario_data.py`, `src/shared/` → `documents/RL_ARCHITECTURE.md`.
    - A directive to fix only the files named in its assigned findings and return a short summary of what changed and why.
-6. Launch all subagents in parallel — dependency ordering is handled within each cluster, not between subagents.
+7. Launch subagents **one at a time, in dependency order**. Wait for each to complete and verify its changes before starting the next.
 
 After all subagents complete, run the full test suite to validate. Do not modify or commit `code-review-issues.md`.
 
