@@ -52,12 +52,15 @@ OmegaConf.register_new_resolver("mul", lambda a, b: a * b)
 # ---------------------------------------------------------------------------
 
 SCENARIO_PROMPTS = [
-    (
-        "Customer order SO-10482 for 1,200 units of SKU-4090 is at risk of missing "
-        "the committed delivery date of 2026-04-18. The order is currently assigned to "
-        "DC-WEST-01. Determine whether the order can still be fulfilled on time. "
-        "If not, recommend the best mitigation action."
-    ),
+    {
+        "order_id": "SO-10482",
+        "prompt": (
+            "Customer order SO-10482 for 1,200 units of SKU-4090 is at risk of missing "
+            "the committed delivery date of 2026-04-18. The order is currently assigned to "
+            "DC-WEST-01. Determine whether the order can still be fulfilled on time. "
+            "If not, recommend the best mitigation action."
+        ),
+    },
 ]
 
 
@@ -83,8 +86,11 @@ def _process_single_assistant_message(
 ) -> tuple[float, bool]:
     """Process one assistant message through the environment, returning (step_reward, is_terminal).
 
-    Uses the same validation pipeline as the interactive runtime to ensure
-    parsing parity between training-time rewards and evaluation metrics.
+    Uses the shared ``validate_tool_call`` from ``runtime.schemas`` to
+    ensure parsing parity between training-time rewards and interactive
+    evaluation metrics. This import is intentional: the validation
+    pipeline is the single source of truth for structural correctness
+    (see MEDIUM-1 in the code review).
     """
     from src.runtime.schemas import (
         ParsedToolCall,
@@ -143,17 +149,29 @@ class LateOrderRecoveryEnv(EnvironmentInterface[LateOrderMetadata]):
         self._tool_registry: dict[str, Any] | None = None
 
     def _get_tool_registry(self) -> dict[str, Any]:
+        # Lazy import of tool implementations from runtime/.  The training
+        # layer normally avoids runtime imports, but this Ray actor needs
+        # the actual tool functions to execute tool calls during scoring.
+        # The import is deferred so it only loads on the Ray worker, not
+        # at module-import time on the driver.
         if self._tool_registry is None:
             from src.runtime.tools import TOOL_REGISTRY
             self._tool_registry = dict(TOOL_REGISTRY)
         return self._tool_registry
 
-    def _get_or_create_env(self, idx: int) -> Any:
-        """Get or create a persistent RepoEnv for the given episode index."""
+    def _get_or_create_env(self, idx: int, order_id: str = "SO-10482") -> Any:
+        """Get or create a persistent RepoEnv for the given episode index.
+
+        Args:
+            idx: Episode index used as the env cache key.
+            order_id: Order ID to initialize the environment with.
+                      Sourced from episode metadata so each prompt
+                      scores against its own scenario data.
+        """
         if idx not in self._envs:
             from src.envs.late_order_env import LateOrderRecoveryEnv as RepoEnv
             env = RepoEnv()
-            env.reset("SO-10482")
+            env.reset(order_id)
             self._envs[idx] = env
         return self._envs[idx]
 
@@ -184,8 +202,9 @@ class LateOrderRecoveryEnv(EnvironmentInterface[LateOrderMetadata]):
             episode_idx = meta.get("episode_idx", id(meta))
             messages_processed = meta.get("messages_processed", 0)
             cumulative_reward = meta.get("cumulative_reward", 0.0)
+            order_id = meta.get("order_id", "SO-10482")
 
-            env = self._get_or_create_env(episode_idx)
+            env = self._get_or_create_env(episode_idx, order_id=order_id)
 
             marginal_reward = 0.0
             new_messages_processed = messages_processed
@@ -330,7 +349,9 @@ class LateOrderDataset(IterableDataset):
 
     def __iter__(self) -> Iterator[DatumSpec]:
         for i in itertools.count():
-            prompt_text = random.choice(SCENARIO_PROMPTS)
+            scenario = random.choice(SCENARIO_PROMPTS)
+            prompt_text = scenario["prompt"]
+            order_id = scenario["order_id"]
 
             messages = []
             if self.add_system_prompt:
@@ -357,6 +378,7 @@ class LateOrderDataset(IterableDataset):
             metadata: LateOrderMetadata = {
                 "prompt_idx": i % len(SCENARIO_PROMPTS),
                 "task_name": "late_order_recovery",
+                "order_id": order_id,
                 "step_num": 0,
                 "episode_idx": i,
                 "messages_processed": 0,

@@ -39,6 +39,8 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from pydantic import ValidationError as PydanticValidationError
+
 
 # -- Parsed action types ----------------------------------------------------
 
@@ -172,7 +174,15 @@ def validate_tool_call(
             raw=raw,
         )
 
-    # Step 3: Check top-level keys
+    # Step 3: Validate envelope structure via Pydantic schemas.
+    # The canonical envelope schemas in shared.tool_schemas provide
+    # machine-checkable structural validation. Error types are mapped
+    # to the same vocabulary the fallback/repair layer expects.
+    from src.shared.tool_schemas import (
+        NemotronToolCallEnvelope,
+        NemotronFinalAnswerEnvelope,
+    )
+
     extra_keys = set(parsed.keys()) - ALLOWED_TOP_KEYS
     if extra_keys:
         return ValidationError(
@@ -183,16 +193,22 @@ def validate_tool_call(
 
     thought = parsed.get("thought")
 
-    # Step 4: Check for final_answer
+    # Step 4: Check for final_answer — validate via Pydantic envelope
     if "final_answer" in parsed:
-        answer = parsed["final_answer"]
-        if not isinstance(answer, dict):
+        try:
+            envelope = NemotronFinalAnswerEnvelope.model_validate(parsed)
+        except PydanticValidationError as exc:
+            first_err = exc.errors()[0] if exc.errors() else {}
             return ValidationError(
                 error_type="bad_final_answer",
-                message=f"'final_answer' must be a dict, got {type(answer).__name__}.",
+                message=f"Invalid final_answer envelope: {first_err.get('msg', str(exc))}",
                 raw=raw,
             )
-        return ParsedFinalAnswer(thought=thought, answer=answer, raw=raw)
+        return ParsedFinalAnswer(
+            thought=envelope.thought,
+            answer=envelope.final_answer.model_dump(),
+            raw=raw,
+        )
 
     # Step 5: Check tool_call is present
     if "tool_call" not in parsed:
@@ -202,33 +218,31 @@ def validate_tool_call(
             raw=raw,
         )
 
-    tool_call = parsed["tool_call"]
-    if not isinstance(tool_call, dict):
+    # Step 6: Validate tool_call envelope via Pydantic
+    try:
+        envelope = NemotronToolCallEnvelope.model_validate(parsed)
+    except PydanticValidationError as exc:
+        first_err = exc.errors()[0] if exc.errors() else {}
+        loc = ".".join(str(l) for l in first_err.get("loc", []))
+        error_type = "bad_tool_call"
+        if "name" in loc:
+            error_type = "bad_tool_name"
+        elif "arguments" in loc:
+            error_type = "bad_arguments"
+        elif loc == "tool_call":
+            error_type = "bad_tool_call"
+        else:
+            error_type = "missing_field"
         return ValidationError(
-            error_type="bad_tool_call",
-            message=f"'tool_call' must be a dict, got {type(tool_call).__name__}.",
+            error_type=error_type,
+            message=f"Invalid tool_call envelope at '{loc}': {first_err.get('msg', str(exc))}",
             raw=raw,
         )
 
-    # Step 6: Check tool_call required keys
-    missing = TOOL_CALL_REQUIRED_KEYS - set(tool_call.keys())
-    if missing:
-        return ValidationError(
-            error_type="missing_field",
-            message=f"Missing required fields in tool_call: {missing}.",
-            raw=raw,
-        )
+    tool_name = envelope.tool_call.name
+    arguments = envelope.tool_call.arguments
 
-    tool_name = tool_call["name"]
-    arguments = tool_call["arguments"]
-
-    # Step 7: Validate tool name
-    if not isinstance(tool_name, str):
-        return ValidationError(
-            error_type="bad_tool_name",
-            message=f"'tool_call.name' must be a string, got {type(tool_name).__name__}.",
-            raw=raw,
-        )
+    # Step 7: Validate tool name against registry
     if tool_name not in tool_registry:
         return ValidationError(
             error_type="unknown_tool",
@@ -236,14 +250,7 @@ def validate_tool_call(
             raw=raw,
         )
 
-    # Step 8: Validate arguments
-    if not isinstance(arguments, dict):
-        return ValidationError(
-            error_type="bad_arguments",
-            message=f"'tool_call.arguments' must be a dict, got {type(arguments).__name__}.",
-            raw=raw,
-        )
-
+    # Step 8: Validate arguments against registry parameter spec
     _fn, expected_params, _desc = tool_registry[tool_name]
     expected_keys = set(expected_params.keys())
     provided_keys = set(arguments.keys())
@@ -265,7 +272,7 @@ def validate_tool_call(
         )
 
     return ParsedToolCall(
-        thought=thought,
+        thought=envelope.thought,
         tool_name=tool_name,
         arguments=arguments,
         raw=raw,

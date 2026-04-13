@@ -394,19 +394,17 @@ def _live_train(
 ) -> dict[str, float]:
     """Attempt a real NeMo RL training step.
 
-    This always raises because notebook-embedded training requires a fully
-    configured policy model, tokenizer, and distributed GPU resources that
-    are not available in the notebook context. This is an intentional scope
-    boundary: the notebook demonstrates rollout collection, datum group
-    assembly, and artifact export. For full GRPO training, use the CLI
-    entrypoint ``python -m src.training.run_grpo_training`` with the
-    appropriate Hydra config.
+    Intentional scope boundary: notebook-embedded training requires a
+    fully configured policy model, tokenizer, and distributed GPU
+    resources that are not available in the notebook context. The
+    notebook demonstrates rollout collection, datum group assembly,
+    and artifact export. For full GRPO training, use the CLI entrypoint:
 
-    The ``run_grpo_notebook(dry_run=False)`` path catches this error and
-    falls back to dry-run mode automatically, reporting the reason.
+        python -m src.training.run_grpo_training
+
+    The ``run_grpo_notebook(dry_run=False)`` path catches this error
+    and falls back to dry-run mode automatically, reporting the reason.
     """
-    from nemo_rl.algorithms.grpo import grpo_train  # noqa: F401
-
     raise RuntimeError(
         "Live NeMo RL training requires a fully configured policy model, "
         "tokenizer, and distributed GPU resources. Use the CLI entrypoint "
