@@ -63,6 +63,7 @@ from src.envs.rewards import (
     compute_terminal_reward,
     summarize_episode_rewards,
     EXPECTED_ARGUMENTS,
+    get_expected_arguments,
     OPTIMAL_TOOL_SEQUENCE,
     OPTIMAL_STEP_COUNT,
     CORRECT_TOOLS_BY_SUBGOAL,
@@ -277,13 +278,13 @@ class LateOrderRecoveryEnv:
     # -- Scenario knowledge (class-level) --------------------------------------
 
     @staticmethod
-    def expected_arguments() -> dict[str, dict[str, Any]]:
-        """Return the expected tool arguments for the SO-10482 scenario."""
-        return dict(EXPECTED_ARGUMENTS)
+    def expected_arguments(order_id: str = "SO-10482") -> dict[str, dict[str, Any]]:
+        """Return the expected tool arguments for a given scenario."""
+        return get_expected_arguments(order_id)
 
     @staticmethod
     def optimal_tool_sequence() -> list[str]:
-        """Return the optimal tool call sequence for SO-10482."""
+        """Return the optimal tool call sequence (same for all scenarios)."""
         return list(OPTIMAL_TOOL_SEQUENCE)
 
     @staticmethod

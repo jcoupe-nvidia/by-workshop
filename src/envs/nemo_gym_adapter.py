@@ -101,15 +101,20 @@ class LateOrderResourceServer(SimpleResourcesServer):
         from src.envs.late_order_env import LateOrderRecoveryEnv
 
         env = LateOrderRecoveryEnv()
-        # Default order for the workshop scenario
-        env.reset("SO-10482")
+
+        # Accept order_id from session config if provided; default to SO-10482
+        order_id = "SO-10482"
+        extra = getattr(body, "custom_data", None) or getattr(body, "model_extra", None)
+        if extra and isinstance(extra, dict):
+            order_id = extra.get("order_id", order_id)
+        env.reset(order_id)
 
         recorder = EpisodeRecorder(
-            task_id="SO-10482",
-            task_prompt="NeMo Gym rollout for SO-10482",
+            task_id=order_id,
+            task_prompt=f"NeMo Gym rollout for {order_id}",
             model_id="nemo-gym-rollout",
         )
-        recorder.record_user_task("NeMo Gym rollout for SO-10482")
+        recorder.record_user_task(f"NeMo Gym rollout for {order_id}")
 
         # Use a UUID so session identity is stable and unique across
         # concurrent rollout workers (fixes parallel-safety issue).

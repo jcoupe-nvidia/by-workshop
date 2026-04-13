@@ -35,7 +35,7 @@ from src.rollouts.trace_types import (
 )
 from src.envs.state import TOOL_DEPENDENCIES
 from src.envs.state import SUBGOAL_ORDER, TOOL_TO_SUBGOAL, Subgoal
-from src.envs.rewards import EXPECTED_ARGUMENTS, OPTIMAL_TOOL_SEQUENCE
+from src.envs.rewards import EXPECTED_ARGUMENTS, get_expected_arguments, OPTIMAL_TOOL_SEQUENCE
 
 
 # -- Evaluation dimensions -------------------------------------------------
@@ -81,6 +81,24 @@ class TrajectoryEvaluation:
     overall: float              # weighted average
     passed: bool                # meets minimum threshold
     summary: str                # one-line summary
+
+
+# -- Helpers ---------------------------------------------------------------
+
+def _extract_order_id(episode: Episode) -> str:
+    """Best-effort extraction of order_id from an Episode's tool calls.
+
+    Looks at get_order calls first; falls back to task_id, then "SO-10482".
+    """
+    for event in episode.tool_calls:
+        payload = event.payload
+        if isinstance(payload, ToolCallPayload) and payload.tool_name == "get_order":
+            oid = payload.arguments.get("order_id")
+            if oid:
+                return str(oid)
+    if episode.task_id and episode.task_id.startswith("SO-"):
+        return episode.task_id
+    return "SO-10482"
 
 
 # -- Individual evaluators -------------------------------------------------
@@ -146,13 +164,16 @@ def eval_tool_validity(episode: Episode) -> DimensionScore:
 def eval_tool_accuracy(episode: Episode) -> DimensionScore:
     """Did tool arguments match the expected values for the scenario?
 
-    Only checks tools that have expected arguments defined in
-    ``envs.rewards.EXPECTED_ARGUMENTS``. Scores as the fraction of checked
-    tools whose arguments matched.
+    Derives the expected arguments from the episode's order_id so that
+    each scenario is evaluated against its own ground truth. Falls back
+    to the SO-10482 default when no order_id is available.
     """
     tool_names = episode.tool_names_called
     if not tool_names:
         return DimensionScore("tool_accuracy", 0.0, 1.0, "No valid tool calls.")
+
+    order_id = _extract_order_id(episode)
+    expected_args = get_expected_arguments(order_id)
 
     checked = 0
     correct = 0
@@ -162,7 +183,7 @@ def eval_tool_accuracy(episode: Episode) -> DimensionScore:
         payload = event.payload
         if not isinstance(payload, ToolCallPayload):
             continue
-        expected = EXPECTED_ARGUMENTS.get(payload.tool_name)
+        expected = expected_args.get(payload.tool_name)
         if expected is None:
             continue
         checked += 1

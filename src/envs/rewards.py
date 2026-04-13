@@ -63,16 +63,41 @@ PENALTY_OVERLONG_EPISODE = -0.3  # per step over optimal
 PENALTY_SILENT_FALLBACK = -0.3  # fallback repair succeeded but is penalized
 
 
-# -- Expected values for SO-10482 (scenario-specific) -------------------------
+# -- Per-scenario expected arguments (computed from scenario data) -------------
 
-EXPECTED_ARGUMENTS: dict[str, dict[str, Any]] = {
-    "get_order": {"order_id": "SO-10482"},
-    "get_shipment_status": {"order_id": "SO-10482"},
-    "get_inventory": {"sku": "SKU-4090", "dc_id": "DC-WEST-01"},
-    "get_fulfillment_capacity": {"dc_id": "DC-WEST-01", "date": "2026-04-18"},
-    "find_alternate_inventory": {"sku": "SKU-4090", "region": "ALL"},
-    "get_supplier_expedite_options": {"sku": "SKU-4090", "qty": 900},
-}
+def get_expected_arguments(order_id: str) -> dict[str, dict[str, Any]]:
+    """Compute the expected tool arguments for a given order.
+
+    Derives expectations from scenario_data so they stay in sync
+    automatically when scenarios are added or modified.
+    """
+    from src.scenario_data import ORDERS, INVENTORY
+
+    if order_id not in ORDERS:
+        return {}
+
+    order = ORDERS[order_id]
+    sku = order["sku"]
+    source_dc = order["source_dc"]
+    committed_date = order["committed_date"]
+    qty = order["qty"]
+
+    available = INVENTORY.get((sku, source_dc), {}).get("available", 0)
+    shortfall = max(0, qty - available)
+    expedite_qty = shortfall if shortfall > 0 else qty
+
+    return {
+        "get_order": {"order_id": order_id},
+        "get_shipment_status": {"order_id": order_id},
+        "get_inventory": {"sku": sku, "dc_id": source_dc},
+        "get_fulfillment_capacity": {"dc_id": source_dc, "date": committed_date},
+        "find_alternate_inventory": {"sku": sku, "region": "ALL"},
+        "get_supplier_expedite_options": {"sku": sku, "qty": expedite_qty},
+    }
+
+
+# Backward-compatible alias: default to SO-10482 for existing call sites
+EXPECTED_ARGUMENTS: dict[str, dict[str, Any]] = get_expected_arguments("SO-10482")
 
 OPTIMAL_TOOL_SEQUENCE = [
     "get_order",
@@ -229,9 +254,10 @@ def compute_step_reward(
         # All subgoals complete — any valid tool is fine
         signal.correct_tool = 0.5
 
-    # -- Correct arguments --
-    if tool_arguments is not None and step.tool_name in EXPECTED_ARGUMENTS:
-        expected = EXPECTED_ARGUMENTS[step.tool_name]
+    # -- Correct arguments (per-scenario) --
+    scenario_expected = get_expected_arguments(state.order_id)
+    if tool_arguments is not None and step.tool_name in scenario_expected:
+        expected = scenario_expected[step.tool_name]
         matches = sum(
             1 for k, v in expected.items()
             if str(tool_arguments.get(k)) == str(v)

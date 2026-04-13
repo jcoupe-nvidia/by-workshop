@@ -52,6 +52,7 @@ OmegaConf.register_new_resolver("mul", lambda a, b: a * b)
 # ---------------------------------------------------------------------------
 
 SCENARIO_PROMPTS = [
+    # --- SO-10482: Transfer from alternate DC ---
     {
         "order_id": "SO-10482",
         "prompt": (
@@ -72,25 +73,171 @@ SCENARIO_PROMPTS = [
     {
         "order_id": "SO-10482",
         "prompt": (
-            "We need to resolve a delivery risk for SO-10482. The order is for 1,200 "
-            "SKU-4090 units out of DC-WEST-01, due 2026-04-18. Check whether on-time "
-            "fulfillment is still possible and propose the best recovery path."
-        ),
-    },
-    {
-        "order_id": "SO-10482",
-        "prompt": (
             "SO-10482 is flagged at-risk: 1,200 units of SKU-4090 shipping from "
             "DC-WEST-01, committed delivery 2026-04-18. Diagnose the root cause, "
             "evaluate recovery options, and recommend the optimal action."
         ),
     },
+
+    # --- SO-10483: Supplier expedite ---
     {
-        "order_id": "SO-10482",
+        "order_id": "SO-10483",
         "prompt": (
-            "Delivery commitment for order SO-10482 (SKU-4090, 1,200 units, DC-WEST-01, "
-            "due 2026-04-18) is at risk. Assess current shipment status, check inventory "
-            "and capacity, explore alternate sourcing, and recommend the best mitigation."
+            "Customer order SO-10483 for 500 units of SKU-100 is at risk of missing "
+            "the committed delivery date of 2026-04-21. The order ships from DC-EAST-02. "
+            "Determine whether fulfillment is on track and recommend the best mitigation "
+            "if needed."
+        ),
+    },
+    {
+        "order_id": "SO-10483",
+        "prompt": (
+            "Order SO-10483 (500 units, SKU-100, DC-EAST-02, due 2026-04-21) is flagged "
+            "at-risk. Investigate available options and recommend a recovery action."
+        ),
+    },
+
+    # --- SO-10484: Partial fulfillment ---
+    {
+        "order_id": "SO-10484",
+        "prompt": (
+            "Customer order SO-10484 for 2,000 units of SKU-200 is at risk of missing "
+            "the committed date of 2026-04-15. The order ships from DC-CENTRAL-03. "
+            "Assess whether full fulfillment is possible and recommend the best action."
+        ),
+    },
+    {
+        "order_id": "SO-10484",
+        "prompt": (
+            "SO-10484 (2,000 units, SKU-200, DC-CENTRAL-03, due 2026-04-15) has a "
+            "tight deadline. Diagnose inventory and capacity, evaluate recovery paths, "
+            "and recommend an action."
+        ),
+    },
+
+    # --- SO-10485: Original DC works (false alarm) ---
+    {
+        "order_id": "SO-10485",
+        "prompt": (
+            "Order SO-10485 for 200 units of SKU-300 from DC-WEST-01, due 2026-04-22, "
+            "was flagged at-risk. Investigate whether the order can ship on time and "
+            "recommend any needed action."
+        ),
+    },
+    {
+        "order_id": "SO-10485",
+        "prompt": (
+            "SO-10485 (200 units, SKU-300, DC-WEST-01, committed 2026-04-22) needs "
+            "a delivery risk assessment. Check shipment status, inventory, and capacity, "
+            "then advise."
+        ),
+    },
+
+    # --- SO-10486: Substitute SKU ---
+    {
+        "order_id": "SO-10486",
+        "prompt": (
+            "Customer order SO-10486 for 600 units of SKU-400 is at risk of missing "
+            "the committed date of 2026-04-19. The order ships from DC-EAST-02. "
+            "Evaluate all fulfillment options and recommend the best recovery path."
+        ),
+    },
+    {
+        "order_id": "SO-10486",
+        "prompt": (
+            "SO-10486 (600 units, SKU-400, DC-EAST-02, due 2026-04-19) may not ship "
+            "on time. Diagnose the issue, explore alternatives including substitutes, "
+            "and recommend an action."
+        ),
+    },
+
+    # --- SO-10487: Escalate (no viable option) ---
+    {
+        "order_id": "SO-10487",
+        "prompt": (
+            "Critical order SO-10487 for 3,000 units of SKU-500 is at risk of missing "
+            "the committed date of 2026-04-14. The order ships from DC-CENTRAL-03. "
+            "This is critical priority. Assess all options and recommend the best action."
+        ),
+    },
+    {
+        "order_id": "SO-10487",
+        "prompt": (
+            "SO-10487 (3,000 units, SKU-500, DC-CENTRAL-03, due 2026-04-14, critical "
+            "priority) is at immediate risk. Investigate inventory, transfers, supplier "
+            "options, and recommend how to proceed."
+        ),
+    },
+
+    # --- SO-10488: Transfer from DC-CENTRAL-03 ---
+    {
+        "order_id": "SO-10488",
+        "prompt": (
+            "Order SO-10488 for 800 units of SKU-600 from DC-EAST-02, due 2026-04-22, "
+            "is flagged at-risk. Determine whether the order can be fulfilled on time "
+            "and recommend the best mitigation."
+        ),
+    },
+    {
+        "order_id": "SO-10488",
+        "prompt": (
+            "SO-10488 (800 units, SKU-600, DC-EAST-02, committed 2026-04-22) needs "
+            "a fulfillment risk assessment. Check all sourcing options and recommend "
+            "an action."
+        ),
+    },
+
+    # --- SO-10489: Supplier expedite (variant) ---
+    {
+        "order_id": "SO-10489",
+        "prompt": (
+            "Customer order SO-10489 for 350 units of SKU-700 is at risk of missing "
+            "the committed date of 2026-04-19. The order ships from DC-WEST-01. "
+            "Investigate options and recommend the best mitigation action."
+        ),
+    },
+    {
+        "order_id": "SO-10489",
+        "prompt": (
+            "SO-10489 (350 units, SKU-700, DC-WEST-01, due 2026-04-19) is flagged "
+            "at-risk. Diagnose the issue, evaluate recovery options, and recommend "
+            "the optimal action."
+        ),
+    },
+
+    # --- SO-10490: Original DC works (false alarm, variant) ---
+    {
+        "order_id": "SO-10490",
+        "prompt": (
+            "Order SO-10490 for 100 units of SKU-800 from DC-CENTRAL-03, due "
+            "2026-04-25, was flagged at-risk. Assess shipment status and inventory, "
+            "then recommend any necessary action."
+        ),
+    },
+    {
+        "order_id": "SO-10490",
+        "prompt": (
+            "SO-10490 (100 units, SKU-800, DC-CENTRAL-03, committed 2026-04-25) "
+            "needs a risk assessment. Check current fulfillment status and advise "
+            "on next steps."
+        ),
+    },
+
+    # --- SO-10491: Transfer from DC-EAST-02 ---
+    {
+        "order_id": "SO-10491",
+        "prompt": (
+            "Customer order SO-10491 for 1,500 units of SKU-900 is at risk of missing "
+            "the committed date of 2026-04-24. The order ships from DC-WEST-01. "
+            "Determine whether fulfillment is feasible and recommend the best recovery."
+        ),
+    },
+    {
+        "order_id": "SO-10491",
+        "prompt": (
+            "SO-10491 (1,500 units, SKU-900, DC-WEST-01, due 2026-04-24) is flagged "
+            "at-risk. Investigate inventory across DCs, evaluate transfers and supplier "
+            "options, and recommend the best action."
         ),
     },
 ]

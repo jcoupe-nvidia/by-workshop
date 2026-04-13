@@ -16,7 +16,7 @@ This repository is a teaching example, not a production system. It is designed t
 
 ## Core Scenario
 
-The workshop centers on late order recovery for customer order `SO-10482` for `1,200` units.
+The workshop centers on **late order recovery** — a constrained customer shipment that may miss its committed delivery date.
 
 The target task is:
 
@@ -29,6 +29,10 @@ The agent investigates options such as:
 - expedite from a supplier
 - partially fulfill
 - recommend a substitute SKU when available
+
+The repo includes **10 scenarios** that share the same task structure but vary in SKU, quantity, source DC, urgency, and inventory distribution. Different scenarios lead to different optimal recovery actions (transfer, supplier expedite, partial fulfillment, substitute SKU, original DC fulfillment, or escalation), which prevents the model from memorizing a single answer and forces it to reason from the data. See `src/scenario_data.py` for the full scenario definitions and synthetic data tables.
+
+The GRPO training dataset uses **prompt rephrasing** — each scenario has multiple paraphrased task prompts so the model learns to extract the relevant order details regardless of how the task is worded. The prompt variants are defined in `src/training/run_grpo_training.py`.
 
 A typical successful run should require `5-10` tool calls and use `2-4` explicit higher-level skills.
 
