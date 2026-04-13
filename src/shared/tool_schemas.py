@@ -109,7 +109,7 @@ class NemotronToolCallEnvelope(BaseModel):
 class FinalAnswerPayload(BaseModel):
     """Payload for a final recommendation answer."""
     action: str = Field(description="Recommended mitigation action.")
-    rationale: str = Field(description="Why this action is best.")
+    rationale: str | None = Field(default=None, description="Why this action is best.")
     expected_delivery: str | None = Field(default=None, description="Expected delivery date (YYYY-MM-DD).")
     meets_committed_date: bool | None = Field(default=None, description="Whether the committed date is met.")
     confidence: float | None = Field(default=None, description="Confidence score 0.0–1.0.")

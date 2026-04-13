@@ -43,6 +43,29 @@ def _mint_episode_id() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Async GRPO metadata key constants (RL_ARCHITECTURE.md lines 68-77)
+# ---------------------------------------------------------------------------
+# These keys define the async metadata contract that trajectories must carry
+# when async GRPO is enabled. They make stale trajectories explicit and
+# filterable instead of silently mixing them into training.
+#
+# Populated with placeholder values during synchronous runs so the contract
+# is visible in serialized output and filterable by downstream tooling.
+
+ASYNC_META_GEN_WEIGHT_VERSION = "gen_weight_version"
+ASYNC_META_TRAIN_WEIGHT_VERSION = "train_weight_version"
+ASYNC_META_TRAJECTORY_AGE_MS = "trajectory_age_ms"
+ASYNC_META_REPLAY_STATUS = "replay_status"
+
+ASYNC_META_KEYS = (
+    ASYNC_META_GEN_WEIGHT_VERSION,
+    ASYNC_META_TRAIN_WEIGHT_VERSION,
+    ASYNC_META_TRAJECTORY_AGE_MS,
+    ASYNC_META_REPLAY_STATUS,
+)
+
+
+# ---------------------------------------------------------------------------
 # Event types
 # ---------------------------------------------------------------------------
 

@@ -26,6 +26,10 @@ import json
 from typing import Any
 
 from src.rollouts.trace_types import (
+    ASYNC_META_GEN_WEIGHT_VERSION,
+    ASYNC_META_TRAIN_WEIGHT_VERSION,
+    ASYNC_META_TRAJECTORY_AGE_MS,
+    ASYNC_META_REPLAY_STATUS,
     Episode,
     EventType,
     ToolCallPayload,
@@ -170,25 +174,44 @@ def episode_to_datum_spec(
         if e.reward is not None
     ]
 
+    extra_env_info: dict[str, Any] = {
+        "reward": effective_reward,
+        "episode_id": episode.episode_id,
+        "task_id": episode.task_id,
+        "model_id": episode.model_id,
+        "per_step_rewards": event_rewards,
+        "metrics": {
+            "valid_tool_calls": episode.metrics.valid_tool_calls,
+            "invalid_tool_calls": episode.metrics.invalid_tool_calls,
+            "repair_attempts": episode.metrics.repair_attempts,
+            "rejects": episode.metrics.rejects,
+            "episode_length": episode.metrics.total_steps,
+            "task_success": 1 if episode.is_complete else 0,
+        },
+        "tools": _build_tool_definitions(),
+        "parallel_tool_calls": False,
+    }
+
+    # Async GRPO metadata (RL_ARCHITECTURE.md lines 68-77).
+    # Propagate from episode.metadata if present; default to synchronous
+    # placeholders so the contract is always visible in serialized output.
+    extra_env_info[ASYNC_META_GEN_WEIGHT_VERSION] = episode.metadata.get(
+        ASYNC_META_GEN_WEIGHT_VERSION, 0,
+    )
+    extra_env_info[ASYNC_META_TRAIN_WEIGHT_VERSION] = episode.metadata.get(
+        ASYNC_META_TRAIN_WEIGHT_VERSION, 0,
+    )
+    extra_env_info[ASYNC_META_TRAJECTORY_AGE_MS] = episode.metadata.get(
+        ASYNC_META_TRAJECTORY_AGE_MS, 0,
+    )
+    extra_env_info[ASYNC_META_REPLAY_STATUS] = episode.metadata.get(
+        ASYNC_META_REPLAY_STATUS, "accepted",
+    )
+
     return {
         "message_log": messages,
         "length": len(messages),
-        "extra_env_info": {
-            "reward": effective_reward,
-            "episode_id": episode.episode_id,
-            "task_id": episode.task_id,
-            "model_id": episode.model_id,
-            "per_step_rewards": event_rewards,
-            "metrics": {
-                "valid_tool_calls": episode.metrics.valid_tool_calls,
-                "invalid_tool_calls": episode.metrics.invalid_tool_calls,
-                "repair_attempts": episode.metrics.repair_attempts,
-                "rejects": episode.metrics.rejects,
-                "episode_length": episode.metrics.total_steps,
-                "task_success": 1 if episode.is_complete else 0,
-            },
-            "tools": _build_tool_definitions(),
-        },
+        "extra_env_info": extra_env_info,
         "loss_multiplier": 1.0,
         "idx": idx,
         "task_name": "late_order_recovery",
@@ -208,6 +231,33 @@ def _extract_system_content(episode: Episode) -> str:
 def _build_tool_definitions() -> list[dict[str, Any]]:
     """Build OpenAI-style tool definitions for DatumSpec."""
     return build_openai_tool_definitions()
+
+
+# ---------------------------------------------------------------------------
+# Async GRPO freshness helper
+# ---------------------------------------------------------------------------
+
+def is_fresh(episode: Episode, max_age_ms: int = 0) -> bool:
+    """Check whether an episode's trajectory is fresh enough for training.
+
+    Returns True for synchronous runs (where trajectory_age_ms is 0 or
+    absent). When async GRPO is enabled, enforces a staleness limit:
+    trajectories older than ``max_age_ms`` are considered stale and
+    should be filtered or down-weighted before training.
+
+    Args:
+        episode: Canonical Episode with async metadata in episode.metadata.
+        max_age_ms: Maximum allowed age in milliseconds. 0 means no limit
+                    (always fresh), which is the correct default for
+                    synchronous collection.
+
+    Returns:
+        True if the episode is fresh enough for training.
+    """
+    if max_age_ms <= 0:
+        return True
+    age = episode.metadata.get(ASYNC_META_TRAJECTORY_AGE_MS, 0)
+    return age <= max_age_ms
 
 
 # ---------------------------------------------------------------------------

@@ -180,8 +180,8 @@ def _process_function_call(
         fn, _params, _desc = tool_registry[valid_name]
         try:
             tool_result = fn(**valid_args)
-        except Exception:
-            tool_result = {"error": "execution_failed"}
+        except Exception as exc:
+            tool_result = {"error": f"{type(exc).__name__}: {exc}"}
         recorder.record_tool_result(valid_name, tool_result)
         env.step(valid_name, valid_args, tool_result, was_repaired=vr.was_repaired)
         step_idx = env.get_step_count() - 1
@@ -692,13 +692,16 @@ def collect_via_resource_server(
     new_keys = set(_sessions.keys()) - pre_keys
     session_id = new_keys.pop()
 
+    # Capture a reference to the session before the verify loop, because
+    # verify() cleans up terminated sessions from _sessions (HIGH-2 fix).
+    session = _sessions[session_id]
+
     # Step 2: verify — send each action as a NeMo Gym response
     for action in actions:
         verify_req = _build_verify_request_from_action(action, session_id)
         asyncio.run(server.verify(verify_req))
 
     # Step 3: Retrieve the episode and reward from the session
-    session = _sessions[session_id]
     episode = session.recorder.build_episode()
     episode.env_state_init = session.env.get_initial_state_snapshot()
 
@@ -714,7 +717,8 @@ def collect_via_resource_server(
         env_final_state=session.env.get_state_snapshot(),
     )
 
-    # Clean up session
+    # Session cleanup is handled by verify() on terminal (HIGH-2 fix).
+    # Clean up any non-terminal session as a safety net.
     _sessions.pop(session_id, None)
 
     return result

@@ -61,6 +61,38 @@ SCENARIO_PROMPTS = [
             "If not, recommend the best mitigation action."
         ),
     },
+    {
+        "order_id": "SO-10482",
+        "prompt": (
+            "Order SO-10482 (1,200 units, SKU-4090, DC-WEST-01) may not ship by the "
+            "2026-04-18 commitment. Investigate fulfillment options and recommend a "
+            "mitigation action."
+        ),
+    },
+    {
+        "order_id": "SO-10482",
+        "prompt": (
+            "We need to resolve a delivery risk for SO-10482. The order is for 1,200 "
+            "SKU-4090 units out of DC-WEST-01, due 2026-04-18. Check whether on-time "
+            "fulfillment is still possible and propose the best recovery path."
+        ),
+    },
+    {
+        "order_id": "SO-10482",
+        "prompt": (
+            "SO-10482 is flagged at-risk: 1,200 units of SKU-4090 shipping from "
+            "DC-WEST-01, committed delivery 2026-04-18. Diagnose the root cause, "
+            "evaluate recovery options, and recommend the optimal action."
+        ),
+    },
+    {
+        "order_id": "SO-10482",
+        "prompt": (
+            "Delivery commitment for order SO-10482 (SKU-4090, 1,200 units, DC-WEST-01, "
+            "due 2026-04-18) is at risk. Assess current shipment status, check inventory "
+            "and capacity, explore alternate sourcing, and recommend the best mitigation."
+        ),
+    },
 ]
 
 
@@ -118,8 +150,8 @@ def _process_single_assistant_message(
     fn, _, _ = tool_registry[tool_name]
     try:
         tool_result = fn(**arguments)
-    except Exception:
-        tool_result = {"error": "execution_failed"}
+    except Exception as exc:
+        tool_result = {"error": f"{type(exc).__name__}: {exc}"}
 
     env.step(tool_name, arguments, tool_result)
     step_reward = env.get_step_reward(env.get_step_count() - 1)
@@ -127,7 +159,7 @@ def _process_single_assistant_message(
 
 
 @ray.remote
-class LateOrderRecoveryEnv(EnvironmentInterface[LateOrderMetadata]):
+class LateOrderTrainingEnv(EnvironmentInterface[LateOrderMetadata]):
     """Multi-step environment that scores tool-call sequences using the repo's
     LateOrderRecoveryEnv for dependency checking, subgoal tracking, and
     dense decomposed rewards.
@@ -383,6 +415,14 @@ class LateOrderDataset(IterableDataset):
                 "episode_idx": i,
                 "messages_processed": 0,
                 "cumulative_reward": 0.0,
+                "parallel_tool_calls": False,
+                # Async GRPO metadata placeholders (RL_ARCHITECTURE.md lines 68-77).
+                # Present with synchronous defaults so the contract is visible
+                # in serialized output and ready for async collection.
+                "gen_weight_version": 0,
+                "train_weight_version": 0,
+                "trajectory_age_ms": 0,
+                "replay_status": "accepted",
             }
 
             datum: DatumSpec = {
@@ -468,11 +508,31 @@ def main() -> None:
     ) = setup(config, tokenizer, train_dataset, val_dataset)
 
     # Create environment
-    env = LateOrderRecoveryEnv.options(num_gpus=0).remote(
+    env = LateOrderTrainingEnv.options(num_gpus=0).remote(
         cfg=dict(config["env"]["late_order_recovery"])
     )
     task_to_env = {"late_order_recovery": env}
     val_task_to_env = task_to_env
+
+    # Reward distribution profiling gate (RL_ARCHITECTURE.md line 279).
+    # Collect a small pilot batch to verify reward variance before training.
+    print("\nProfiling reward distribution on pilot batch...")
+    from src.training.grpo_notebook import profile_reward_distribution
+    pilot_specs: list[dict[str, Any]] = []
+    pilot_iter = iter(train_dataset)
+    for _ in range(min(8, ds_length)):
+        try:
+            pilot_specs.append(next(pilot_iter))
+        except StopIteration:
+            break
+    if pilot_specs:
+        profile = profile_reward_distribution(pilot_specs, label="pilot")
+        if not profile["pass"]:
+            print(
+                "WARNING: Degenerate reward distribution detected in pilot batch. "
+                "GRPO training may not provide useful signal. Consider adjusting "
+                "temperature, prompt diversity, or verification thresholds."
+            )
 
     print("\nStarting GRPO training...")
     grpo_train(

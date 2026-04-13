@@ -44,7 +44,14 @@ class TestValidateToolCall:
         raw = '{"thought": "done", "final_answer": {"action": "transfer"}}'
         result = validate_tool_call(raw, TOOL_REGISTRY)
         assert isinstance(result, ParsedFinalAnswer)
-        assert result.answer == {"action": "transfer"}
+        assert result.answer["action"] == "transfer"
+
+    def test_valid_final_answer_with_rationale(self):
+        raw = '{"thought": "done", "final_answer": {"action": "transfer", "rationale": "best option"}}'
+        result = validate_tool_call(raw, TOOL_REGISTRY)
+        assert isinstance(result, ParsedFinalAnswer)
+        assert result.answer["action"] == "transfer"
+        assert result.answer["rationale"] == "best option"
 
     def test_no_json_returns_error(self):
         result = validate_tool_call("just some text", TOOL_REGISTRY)

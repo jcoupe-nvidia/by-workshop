@@ -1,5 +1,5 @@
 grpo:
-  num_prompts_per_step: 4
+  num_prompts_per_step: 5
   num_generations_per_prompt: 4
   max_rollout_turns: 12
   max_num_epochs: 1

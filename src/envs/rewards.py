@@ -19,6 +19,16 @@ Reward design principles:
     - Explicit penalties for malformed calls, dependency violations, redundancy,
       looping, hallucinated conclusions, overlong episodes, silent fallback reliance
     - Reward components are inspectable and decomposable for debugging
+
+Reward shape rationale:
+    RL_ARCHITECTURE.md recommends binary (0/1) rewards for GRPO simplicity.
+    This module uses continuous decomposed rewards instead, because the
+    supply-chain scenario requires per-step training signal: binary task-level
+    rewards would not credit partial progress (e.g., correct tool sequence
+    with wrong arguments) or penalize specific failure modes (e.g., dependency
+    violations vs. redundant calls) during multi-step training. The increased
+    GRPO variance from continuous rewards is acceptable given the small
+    action space and deterministic tools.
 """
 from __future__ import annotations
 

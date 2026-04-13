@@ -303,7 +303,7 @@ def run_grpo_notebook(
     include_repairs: bool = True,
     stage: TrainingStage = TrainingStage.FULL_MULTISTEP_RL,
     artifact_dir: str = "artifacts/grpo_run",
-    dry_run: bool = False,
+    dry_run: bool = True,
 ) -> GRPORunResult:
     """Run a complete GRPO training cycle for the notebook.
 
@@ -314,10 +314,11 @@ def run_grpo_notebook(
         4. Execute training step (real via NeMo RL or dry-run)
         5. Return compact result for notebook display
 
-    When dry_run=False (the default), attempts a real NeMo RL training
-    step. If GPU resources or the NeMo RL training API are unavailable,
-    falls back to dry-run mode and reports the reason. For full training,
-    use ``python -m src.training.run_grpo_training``.
+    When dry_run=True (the default), simulates a training step using
+    the collected rollouts. Set dry_run=False to attempt a real NeMo RL
+    training step; if GPU resources are unavailable, falls back to
+    dry-run mode automatically. For full training, use
+    ``python -m src.training.run_grpo_training``.
 
     Args:
         num_rollouts: Number of episodes to collect (default 4).
@@ -416,6 +417,65 @@ def _live_train(
 # ---------------------------------------------------------------------------
 # Reward/advantage data extraction for plotting
 # ---------------------------------------------------------------------------
+
+def profile_reward_distribution(
+    datum_specs: list[dict[str, Any]],
+    label: str = "pre-training",
+) -> dict[str, float]:
+    """Profile the reward distribution of a datum group and print diagnostics.
+
+    Checks for degenerate distributions (all-zero, all-one, zero variance)
+    that indicate verification or difficulty mismatches before GRPO training
+    wastes compute (RL_ARCHITECTURE.md line 279).
+
+    Args:
+        datum_specs: The GRPO datum group to profile.
+        label: Label for the diagnostic output.
+
+    Returns:
+        Dict with mean, std, min, max, and a pass/fail flag.
+    """
+    rewards = [
+        d.get("extra_env_info", {}).get("reward", 0.0)
+        for d in datum_specs
+    ]
+    n = len(rewards)
+    if n == 0:
+        print(f"[{label}] WARNING: No datum specs to profile.")
+        return {"mean": 0.0, "std": 0.0, "min": 0.0, "max": 0.0, "n": 0, "pass": False}
+
+    mean_r = sum(rewards) / n
+    var_r = sum((r - mean_r) ** 2 for r in rewards) / n
+    std_r = var_r ** 0.5
+    min_r = min(rewards)
+    max_r = max(rewards)
+
+    all_zero = all(abs(r) < 1e-6 for r in rewards)
+    all_one = all(abs(r - 1.0) < 1e-6 for r in rewards)
+    degenerate = all_zero or all_one or std_r < 1e-6
+
+    print(f"[{label}] Reward distribution (n={n}):")
+    print(f"  mean={mean_r:+.4f}  std={std_r:.4f}  min={min_r:+.4f}  max={max_r:+.4f}")
+    if degenerate:
+        print(f"  WARNING: Degenerate reward distribution detected.")
+        if all_zero:
+            print(f"  All rewards are zero — model may not produce valid tool calls.")
+        elif all_one:
+            print(f"  All rewards are 1.0 — verification may be too lenient.")
+        else:
+            print(f"  Zero variance — GRPO advantages will be zero, no training signal.")
+    else:
+        print(f"  OK: Reward variance is sufficient for GRPO training.")
+
+    return {
+        "mean": round(mean_r, 4),
+        "std": round(std_r, 4),
+        "min": round(min_r, 4),
+        "max": round(max_r, 4),
+        "n": n,
+        "pass": not degenerate,
+    }
+
 
 def extract_reward_plot_data(
     result: GRPORunResult,

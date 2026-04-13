@@ -140,6 +140,13 @@ class LateOrderResourceServer(SimpleResourcesServer):
         actions = _extract_actions_from_response(body.response)
         reward = process_agent_actions(actions, session.env, session.recorder)
 
+        # Clean up terminated sessions to prevent memory leaks during
+        # long training runs (RL_ARCHITECTURE.md line 337).
+        if session.env.is_terminal:
+            session_id = getattr(body, "session_id", None)
+            if session_id and session_id in _sessions:
+                _sessions.pop(session_id, None)
+
         return BaseVerifyResponse(
             responses_create_params=body.responses_create_params,
             response=body.response,
@@ -168,28 +175,11 @@ class LateOrderResourceServer(SimpleResourcesServer):
 
         # No session found and multiple (or zero) sessions exist.
         # Fail closed rather than silently creating an untracked session.
-        if _sessions:
-            raise ValueError(
-                f"session_id '{session_id}' not found among "
-                f"{len(_sessions)} active sessions. "
-                f"Call seed_session() first or pass a valid session_id."
-            )
-
-        # Zero sessions: create a fallback and register it so that
-        # downstream export APIs (get_session_episode, etc.) can find it.
-        from src.envs.late_order_env import LateOrderRecoveryEnv
-
-        env = LateOrderRecoveryEnv()
-        env.reset("SO-10482")
-        recorder = EpisodeRecorder(
-            task_id="SO-10482",
-            task_prompt="NeMo Gym rollout for SO-10482",
-            model_id="nemo-gym-rollout",
+        raise ValueError(
+            f"session_id '{session_id}' not found among "
+            f"{len(_sessions)} active session(s). "
+            f"Call seed_session() before verify()."
         )
-        fallback_id = str(uuid.uuid4())
-        session = _NemoGymSession(env=env, recorder=recorder)
-        _sessions[fallback_id] = session
-        return session
 
     @staticmethod
     def get_session_episode(session_id: str) -> Episode | None:
