@@ -13,6 +13,18 @@ This repository contains an MVP notebook for a workshop on agentic supply-chain 
 
 This is a teaching example, not a production system. The goal is to show concrete patterns, tradeoffs, and evaluation methods in a form that is easy to present live.
 
+## Execution environment
+
+All code in this repository must be executed inside the `nemo-rl` container using the virtual environment at `/opt/nemo_rl_venv`. Always activate it before running or testing anything:
+
+```bash
+source /opt/nemo_rl_venv/bin/activate
+```
+
+When running Python, `pip install`, `jupyter`, `pytest`, or any other command, ensure the active interpreter is `/opt/nemo_rl_venv/bin/python`. Never use the system Python or create a separate conda/venv environment.
+
+If any packages are added, removed, or changed in the venv (e.g. via `pip install` or `pip uninstall`), update the install instructions in `README.md` to reflect the change so the documented setup stays in sync.
+
 ## Local model access reference
 
 When this repo needs to call the locally deployed LLM, use `documents/llm-access.md` as the source of truth for the endpoint, model id, smoke test, and cache mapping.

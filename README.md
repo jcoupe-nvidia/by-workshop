@@ -164,20 +164,56 @@ The canonical tool-call shape is Nemotron-style structured JSON:
 
 Malformed outputs are handled explicitly through repair or reject logic rather than being silently hidden.
 
-## Quickstart
+## Prerequisites
 
-Create the environment and validate imports:
+This repo runs inside the `nemo-rl` container. GPU access is required.
+
+### 1. Launch the container
 
 ```bash
-conda env create -f environment.yaml
-conda activate by-workshop
+docker run --rm -it \
+  --gpus all \
+  --ipc=host \
+  -v "$PWD":/workspace \
+  -w /workspace \
+  nvcr.io/nvidia/nemo-rl:v0.5.0
+```
+
+### 2. Activate the virtual environment and install dependencies
+
+Once inside the container:
+
+```bash
+source /opt/nemo_rl_venv/bin/activate
+echo "$VIRTUAL_ENV"
+python -V
+which python
+```
+
+Install additional Python packages:
+
+```bash
+python -m pip install \
+  "openai<3" \
+  "jupyterlab<5" \
+  "ipykernel<8" \
+  "nvidia-nat" \
+  "nemo-gym==0.2.0" \
+  requests
+```
+
+### 3. Validate imports
+
+```bash
 python -m src.main --check-imports
 ```
 
-Start the notebook experience:
+## Quickstart
+
+Start the notebook experience (inside the container with the venv activated):
 
 ```bash
-jupyter lab
+jupyter lab --ip=0.0.0.0 --allow-root --no-browser
 ```
 
 Then open `notebooks/late_order_recovery_workshop.ipynb`.
