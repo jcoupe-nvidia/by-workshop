@@ -58,6 +58,13 @@ from src.training.nemo_rl_adapter import (
 
 
 # ---------------------------------------------------------------------------
+# Curriculum experiment plan
+# ---------------------------------------------------------------------------
+# See training.experiments for the illustrative 4-stage curriculum plan
+# (ExperimentPlan / build_default_experiment_plan). That plan documents
+# the intended progression but is not yet wired into this notebook helper.
+
+# ---------------------------------------------------------------------------
 # Result types
 # ---------------------------------------------------------------------------
 
@@ -355,6 +362,14 @@ def run_grpo_notebook(
     effective_dry_run = dry_run
 
     if not dry_run:
+        import warnings
+        warnings.warn(
+            "dry_run=False runs fresh GRPO training via NeMo RL (generating new rollouts). "
+            "The collected datum_specs are exported as artifacts but not consumed by "
+            "the live training path. For offline training on collected episodes, use: "
+            "python -m src.training.run_grpo_training",
+            stacklevel=2,
+        )
         try:
             live_metrics = _live_train(datum_specs, stage_config)
             train_metrics.update(live_metrics)
@@ -393,7 +408,18 @@ def _live_train(
     datum_specs: list[dict[str, Any]],
     stage_config: StageConfig,
 ) -> dict[str, float]:
-    """Run a real NeMo RL GRPO training step.
+    """Run a real NeMo RL GRPO training step (fresh rollouts, NOT replay).
+
+    WARNING: The ``datum_specs`` collected earlier in run_grpo_notebook() are
+    exported as JSONL artifacts but are NOT consumed by this live training
+    path. NeMo RL's grpo_train() generates fresh rollouts internally via
+    LateOrderDataset + LateOrderTrainingEnv (an IterableDataset + multi-step
+    environment). The collected datum_specs use a different reward shaping
+    pipeline (see reward_views.py) and cannot be injected into NeMo RL's
+    training loop without framework-level changes.
+
+    For offline training on previously collected episodes, use:
+        python -m src.training.run_grpo_training
 
     Delegates to the same infrastructure as ``python -m src.training.run_grpo_training``
     but skips CLI argument parsing.  Requires GPU resources (7 GPUs per
@@ -483,7 +509,7 @@ def profile_reward_distribution(
 
     Checks for degenerate distributions (all-zero, all-one, zero variance)
     that indicate verification or difficulty mismatches before GRPO training
-    wastes compute (RL_ARCHITECTURE.md line 279).
+    wastes compute (RL_ARCHITECTURE.md § Verification and Reward Design).
 
     Args:
         datum_specs: The GRPO datum group to profile.

@@ -43,7 +43,7 @@ def _mint_episode_id() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Async GRPO metadata key constants (RL_ARCHITECTURE.md lines 68-77)
+# Async GRPO metadata key constants (RL_ARCHITECTURE.md § Async Metadata Contract)
 # ---------------------------------------------------------------------------
 # These keys define the async metadata contract that trajectories must carry
 # when async GRPO is enabled. They make stale trajectories explicit and

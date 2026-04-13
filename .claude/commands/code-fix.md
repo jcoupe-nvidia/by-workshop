@@ -2,77 +2,62 @@
 description: Fix issues from code review and run tests
 ---
 
-Read `@PLAN.md`, `@CLAUDE.md`, `@documents/RL_ARCHITECTURE.md`, `@documents/NVIDIA_SOFTWARE_MAPPING.md`, and `@documents/NAT.md`.
-
 Fix the issues identified in `@code-review-issues.md`.
 
-Prioritize fixes using the same review order:
+Key reference documents (read as needed, not all at once):
+- `CLAUDE.md` — repo purpose, design rules, and constraints
+- `PLAN.md` — migration status (preserve current phase status)
+- `documents/RL_ARCHITECTURE.md` — layer boundaries, design practices, and anti-patterns
+- `documents/NVIDIA_SOFTWARE_MAPPING.md` — NVIDIA stack mapping
+- `documents/NAT.md` — NAT best practices for runtime-layer fixes
 
-1. Best-practice RL architecture, with a strong focus on GRPO-readiness: verification and reward design, on-policy training compatibility, and multi-step environment correctness.
-2. Verification and reward design quality: ensure `verify()` is reliable, meaningful, and scalable; uses the appropriate verification strategy (trajectory matching, state matching, or composite); guards against malformed output; includes structured diagnostic fields; and profiles reward distributions before GRPO training.
-3. Multi-step environment correctness: session state isolation by session identifier with direct assignment in `seed_session()` (not `setdefault`); session cleanup at episode end; sequential tool execution enforced via `parallel_tool_calls: false`; tool errors returned as observations rather than crashing the episode; tool errors logged in traces.
-4. Ensure the software defined in `documents/NVIDIA_SOFTWARE_MAPPING.md` is used for the layer and task described, including correct alignment with the NeMo Gym three-server architecture (Agent server -> `runtime/`, Model server -> external/stateless, Resources server -> `envs/`).
-5. NAT usage follows the best practices defined in `documents/NAT.md`, including runtime-only ownership, explicit skills, function groups, declarative config, intentional middleware, trace preservation, and observability.
-6. On-policy training compatibility: preserve raw token IDs and log probabilities from prior model calls rather than relying on re-tokenization; avoid modifying rollout history between model calls; keep these corrections in the training framework integration, not in `envs/` or `runtime/`.
-7. Explainability of the code and clarity of responsibility boundaries across the layers defined in `documents/RL_ARCHITECTURE.md`, including verification logic living in `envs/` (not scattered across `runtime/` adapters or notebook cells).
-8. Strength and completeness of the observability layer.
+Fix priorities, in order:
+
+1. RL architecture and GRPO-readiness: verification/reward design, on-policy training compatibility, multi-step environment correctness.
+2. Verification and reward quality: `verify()` reliability, strategy choice, malformed-output guards, diagnostic fields, reward distribution profiling.
+3. Multi-step environment correctness: session isolation, sequential tool execution, error-as-observation.
+4. NVIDIA software mapping alignment including NeMo Gym three-server architecture.
+5. NAT usage best practices.
+6. On-policy training compatibility.
+7. Responsibility boundary clarity and explainability.
+8. Observability completeness.
 
 Before making changes:
-- review `@code-review-issues.md` and group the findings into concrete fix categories
-- confirm which findings are actionable code changes versus open questions or assumptions
-- preserve the ownership boundaries described in `@documents/RL_ARCHITECTURE.md`
-- follow the NAT best practices described in `@documents/NAT.md` when fixing runtime-layer issues
-- preserve the current phase status and sequencing in `@PLAN.md`
-- avoid speculative refactors that are not needed to resolve the review findings
+- Read `code-review-issues.md` and enumerate every distinct finding.
+- For each finding, decide whether it is actionable or an open question.
+- Preserve ownership boundaries from `documents/RL_ARCHITECTURE.md` — especially the layer boundary table and anti-patterns list.
+- Avoid speculative refactors not needed to resolve the findings.
 
-During execution:
-- implement fixes for the actionable findings in `@code-review-issues.md`
-- prefer changes that improve architectural clarity, separation of concerns, and observability without expanding scope unnecessarily
-- keep runtime, environment, rollout, training, systems, and evaluation responsibilities clearly separated
-- when fixing environment-layer issues, ensure:
-  - `seed_session()` initializes state with direct assignment, never `setdefault`
-  - `setdefault` is only used in tool methods as a safe fallback for uninitialized sessions
-  - all mutable per-episode state is keyed by session identifier
-  - session state is cleaned up at episode end
-  - tool execution errors are returned as observations, not raised as exceptions
-  - `verify()` wraps JSON parsing in try/except and defaults to reward 0.0 on parse failure
-  - `verify()` returns structured diagnostic fields alongside the scalar reward
-- when fixing verification and reward issues, ensure:
-  - the verification strategy is documented and deliberately chosen (trajectory matching vs state matching vs composite)
-  - for the supply-chain scenario, composite verification is the default
-  - binary rewards (0/1) are used unless continuous rewards are explicitly justified
-  - reward distribution profiling is supported before GRPO training begins
-- when fixing rollout or training issues, ensure:
-  - sequential tool execution is enforced where tool outputs inform subsequent calls
-  - raw token IDs and generation metadata are preserved for on-policy training compatibility
-  - rollout history is not silently modified between model calls
-  - async metadata fields (weight version, freshness, replay acceptance) are present if async GRPO is in scope
-- when fixing runtime-layer issues, ensure:
-  - runtime orchestrates the rollout lifecycle (seed -> loop -> verify) but does not own task truth or verification logic
-  - the model server is treated as external and stateless
-  - malformed calls, rejects, retries, and repairs are preserved in traces
-- eliminate anti-patterns listed in `documents/RL_ARCHITECTURE.md`:
-  - crashing the episode on tool execution errors instead of returning the error as an observation
-  - sharing mutable state across concurrent rollouts
-  - using `setdefault` in session initialization
-  - skipping reward distribution profiling before GRPO training
-  - relying on re-tokenized or re-templated text for on-policy training
-  - defining verification logic outside `envs/`
-- update or add tests only when they materially improve confidence in the fixes
-- do not modify or commit `@code-review-issues.md`; treat it as review input only
+To avoid filling the context window, delegate fixes to focused subagents. Before spawning any subagent, analyze the findings for dependencies:
 
-Validation:
-- run all relevant tests for the changed code
-- if the repository has a single project-wide test command, run that as well
-- report any failing tests, skipped tests, or missing test coverage clearly
-- if there are lint or type-check commands that are standard for the repo, run them when relevant to the changes
-- verify that `verify()` implementations are deterministic (same rollout produces the same score)
-- verify that session state isolation is correct by checking that no mutable state is shared across sessions
+1. Parse `code-review-issues.md` to build a list of individual findings (each heading or numbered item that describes a distinct problem).
+2. Skip findings that are open questions, duplicates, or overlap with items already tracked in `future-work-list.md`.
+3. Build a dependency graph across the remaining actionable findings. Two findings are dependent if any of the following hold:
+   - They touch the same file.
+   - One finding's fix changes a function signature, type, data structure, or contract that the other finding relies on.
+   - One finding is about producing data (e.g., adding a diagnostic field, changing a return type) and another is about consuming that data (e.g., using the field downstream, adjusting reward logic).
+   - They share a logical precondition — for example, fixing session isolation must land before fixing verify() guards that assume isolated sessions.
+   - Fixing them independently would create merge conflicts or contradictory code.
+4. Group dependent findings into clusters. Each cluster becomes one subagent. Independent findings that belong to no cluster each get their own subagent.
+5. For each subagent (whether single-issue or multi-issue cluster), the prompt must include:
+   - The full text of every finding assigned to it (severity, affected files, evidence, and recommended fix).
+   - For clusters: an explicit note on why the findings are grouped and what ordering constraints exist between them.
+   - Instructions to read the reference docs relevant to the affected files' layer before making changes:
+     - `src/envs/` → `documents/RL_ARCHITECTURE.md` §§ Session State, Verification and Reward Design.
+     - `src/runtime/` → `documents/NAT.md`.
+     - `src/rollouts/` or `src/envs/nemo_gym_adapter.py` → `documents/RL_ARCHITECTURE.md` § NeMo Gym Three-Server Lifecycle.
+     - `src/training/` → `documents/RL_ARCHITECTURE.md` §§ Design Practices, On-Policy Corrections.
+     - `src/eval/`, `src/scenario_data.py`, `src/shared/` → `documents/RL_ARCHITECTURE.md`.
+   - A directive to fix only the files named in its assigned findings and return a short summary of what changed and why.
+6. Launch all subagents in parallel — dependency ordering is handled within each cluster, not between subagents.
+
+After all subagents complete, run the full test suite to validate. Do not modify or commit `code-review-issues.md`.
 
 Return the result in this format:
 
+```md
 ## Fixed
-- list the issues from `@code-review-issues.md` that were addressed
+- list the issues from code-review-issues.md that were addressed
 - include concrete file references and a short explanation of each fix
 
 ## Validation
@@ -80,5 +65,6 @@ Return the result in this format:
 - summarize pass/fail status and any important output
 
 ## Remaining
-- list findings from `@code-review-issues.md` that were not fixed
+- list findings from code-review-issues.md that were not fixed
 - explain blockers, open questions, or reasons for deferring them
+```

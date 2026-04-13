@@ -22,4 +22,4 @@ The curriculum infrastructure supports an SFT stage (`TrainingStage.SFT_SUCCESSF
 
 Add 3–5 hand-curated SFT demonstrations covering the distinct scenario types: DC transfer, supplier expedite, partial fulfillment, false alarm, and escalation. Each demonstration should include exemplary reasoning in the `thought` field and a correct tool sequence. Store them in `src/rollouts/sft_demonstrations.py` and wire them into the SFT stage of the curriculum. This is also a workshop teaching opportunity ("here is what good demonstrations look like and why they help RL").
 
-See `RL_ARCHITECTURE.md` practice 17 and MEDIUM-4 in the code review for background.
+See `RL_ARCHITECTURE.md` § Warm-Start and Async GRPO and MEDIUM-4 in the code review for background.

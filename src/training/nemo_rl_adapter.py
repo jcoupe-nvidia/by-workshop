@@ -49,6 +49,24 @@ from src.training.datasets import TrainingRecord
 
 
 # ---------------------------------------------------------------------------
+# Task success helper
+# ---------------------------------------------------------------------------
+
+def _compute_task_success(episode: Episode) -> int:
+    """Compute task success using the canonical predicate from envs.rewards."""
+    from src.envs.rewards import task_success_facts
+    final_answer = None
+    if episode.terminal and hasattr(episode.terminal, 'final_answer'):
+        final_answer = episode.terminal.final_answer
+    success_info = task_success_facts(
+        final_answer=final_answer,
+        order_id=episode.task_id,
+        is_complete=episode.is_complete,
+    )
+    return 1 if success_info["success"] else 0
+
+
+# ---------------------------------------------------------------------------
 # Episode -> DatumSpec conversion
 # ---------------------------------------------------------------------------
 
@@ -186,13 +204,13 @@ def episode_to_datum_spec(
             "repair_attempts": episode.metrics.repair_attempts,
             "rejects": episode.metrics.rejects,
             "episode_length": episode.metrics.total_steps,
-            "task_success": 1 if episode.is_complete else 0,
+            "task_success": _compute_task_success(episode),
         },
         "tools": _build_tool_definitions(),
         "parallel_tool_calls": False,
     }
 
-    # Async GRPO metadata (RL_ARCHITECTURE.md lines 68-77).
+    # Async GRPO metadata (RL_ARCHITECTURE.md § Async Metadata Contract).
     # Propagate from episode.metadata if present; default to synchronous
     # placeholders so the contract is always visible in serialized output.
     extra_env_info[ASYNC_META_GEN_WEIGHT_VERSION] = episode.metadata.get(

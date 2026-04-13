@@ -80,9 +80,9 @@ def plot_grpo_rewards(
     advantages = plot_data["advantages"]
     adv_colors = ["#3498db" if a >= 0 else "#e67e22" for a in advantages]
     ax2.bar(x, advantages, color=adv_colors, edgecolor="white", linewidth=0.5)
-    ax2.set_title("Group-Relative Advantage")
+    ax2.set_title("Group-Relative Advantage (z-scored)")
     ax2.set_xlabel("Episode")
-    ax2.set_ylabel("Advantage (reward − group mean)")
+    ax2.set_ylabel("Advantage (z-scored, clamped ±5)")
     ax2.set_xticks(x)
     ax2.set_xticklabels(labels, rotation=30, ha="right", fontsize=8)
     ax2.axhline(y=0, color="gray", linewidth=0.5, linestyle="--")

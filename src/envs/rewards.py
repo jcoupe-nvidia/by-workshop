@@ -189,6 +189,84 @@ REQUIRED_ANSWER_FIELDS = {"action", "rationale"}
 OPTIONAL_ANSWER_FIELDS = {"confidence", "expected_delivery", "meets_committed_date"}
 
 
+# -- Canonical task-success evaluator -----------------------------------------
+
+def task_success_facts(
+    final_answer: dict[str, Any] | None,
+    order_id: str,
+    scored_options: list[dict[str, Any]] | None = None,
+    is_complete: bool = True,
+) -> dict[str, Any]:
+    """Single source of truth for task success evaluation.
+
+    Returns dict with keys:
+        success: bool — overall task success
+        action_correct: bool — recommended action matches expected
+        reason: str — human-readable explanation
+        structural_ok: bool — required fields present
+        grounded: bool — action appears in scored options
+    """
+    if not is_complete or final_answer is None:
+        reason = "incomplete episode" if not is_complete else "no final answer"
+        return {
+            "success": False,
+            "action_correct": False,
+            "reason": reason,
+            "structural_ok": False,
+            "grounded": False,
+        }
+
+    present = set(final_answer.keys()) & REQUIRED_ANSWER_FIELDS
+    missing = REQUIRED_ANSWER_FIELDS - present
+    structural_ok = len(missing) == 0
+
+    if not structural_ok:
+        return {
+            "success": False,
+            "action_correct": False,
+            "reason": f"Missing required fields: {sorted(missing)}",
+            "structural_ok": False,
+            "grounded": False,
+        }
+
+    # Ground-truth action comparison (same logic as compute_terminal_reward)
+    expected = get_expected_action(order_id)
+    recommended = str(final_answer.get("action", "")).lower().strip()
+    action_correct = False
+    if expected != "unknown" and recommended:
+        action_correct = expected in recommended or recommended in expected
+
+    # Grounding: does the recommended action appear in scored options?
+    grounded = False
+    if scored_options is not None:
+        action_text = recommended
+        grounded = any(
+            action_text and (
+                action_text in str(opt.get("description", "")).lower()
+                or action_text in str(opt.get("source", "")).lower()
+                or action_text in str(opt.get("supplier", "")).lower()
+                or action_text in str(opt.get("action", "")).lower()
+            )
+            for opt in scored_options
+        )
+
+    success = structural_ok and action_correct
+    parts: list[str] = []
+    if not action_correct:
+        parts.append(f"action '{recommended}' does not match expected '{expected}'")
+    if scored_options is not None and not grounded:
+        parts.append("action not grounded in scored options")
+    reason = "ok" if success else "; ".join(parts) if parts else "unknown failure"
+
+    return {
+        "success": success,
+        "action_correct": action_correct,
+        "reason": reason,
+        "structural_ok": structural_ok,
+        "grounded": grounded,
+    }
+
+
 # -- Reward signal dataclass --------------------------------------------------
 
 @dataclass
@@ -430,7 +508,7 @@ def compute_terminal_reward(
 
     # Outcome correctness: does the recommended action match the expected
     # optimal action for this scenario? (closes MEDIUM-3 / composite
-    # verification requirement from RL_ARCHITECTURE.md lines 303-304)
+    # verification requirement from RL_ARCHITECTURE.md § Verification and Reward Design)
     expected = get_expected_action(state.order_id)
     recommended = str(answer.get("action", "")).lower().strip()
     if expected != "unknown" and recommended:

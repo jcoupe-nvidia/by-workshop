@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -294,7 +295,7 @@ def run_skill_command(
 
         try:
             result = subprocess.run(
-                ["python3", str(script_path)],
+                [sys.executable, str(script_path)],
                 cwd=str(skill_dir),
                 capture_output=True,
                 text=True,

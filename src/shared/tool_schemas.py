@@ -216,14 +216,11 @@ IMPORTANT RULES:
 {{"thought": "your brief reasoning", "tool_call": {{"name": "tool_name", "arguments": {{...}}}}}}
 3. When you have gathered enough information and are ready to give a final recommendation, respond with:
 {{"thought": "your reasoning", "final_answer": {{"action": "recommended action", "rationale": "why this is best", "expected_delivery": "YYYY-MM-DD", "meets_committed_date": true/false, "confidence": 0.0-1.0}}}}
-4. Follow the correct tool call sequence. You must respect dependencies:
-   - Start with get_order to look up the order
-   - Then get_shipment_status to check shipping state
-   - Then get_inventory to check stock at the source DC
-   - Then get_fulfillment_capacity to check DC capacity
-   - Then find_alternate_inventory to search other DCs
-   - Then get_transfer_eta for transfer options and get_supplier_expedite_options for supplier rush options
-   - Then score_recovery_options to rank the options
-   - Then recommend_action to produce a final recommendation
+4. Follow the tool dependency graph. Each tool lists its prerequisites in [requires: ...] above.
+   Call tools in an order that satisfies all prerequisites. You may skip tools that are not
+   needed for the scenario (e.g., skip alternate sourcing if the primary DC can fulfill).
+   The minimal path is: get_order → get_shipment_status → get_inventory → get_fulfillment_capacity
+   → score_recovery_options → recommend_action. Add find_alternate_inventory, get_transfer_eta,
+   and get_supplier_expedite_options only when the primary DC cannot fulfill the order.
 5. The "thought" field is optional but encouraged for reasoning transparency.
 6. Always include all required arguments for each tool."""

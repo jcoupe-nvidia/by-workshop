@@ -57,6 +57,9 @@ transitions:
     - synthesize_recommendation
   synthesize_recommendation: []
 
+# NOTE: The model block below is informational — it documents the intended
+# deployment target but is not consumed by the runtime. Interactive paths
+# use hardcoded endpoints in agent.py and nat_llm.py.
 model:
   endpoint: ${NEMOTRON_ENDPOINT:-http://0.0.0.0:8000/v1/chat/completions}
   model_name: ${NEMOTRON_MODEL:-nvidia/nemotron-3-nano}

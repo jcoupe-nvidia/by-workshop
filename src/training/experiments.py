@@ -82,6 +82,10 @@ class ExperimentPlan:
     """An ordered sequence of experiments forming a complete training plan.
 
     Represents the full curriculum progression from SFT through robustness.
+
+    NOTE: This plan is illustrative — it documents the intended 4-stage
+    curriculum progression but is not yet wired into run_grpo_training.py
+    or grpo_notebook.py. See those modules for the active training paths.
     """
     experiments: list[ExperimentConfig] = field(default_factory=list)
     plan_name: str = ""
@@ -157,6 +161,11 @@ def build_default_experiment_plan(
     base_output_dir: str = "outputs/training",
 ) -> ExperimentPlan:
     """Build the default 4-stage experiment plan for late-order recovery.
+
+    NOTE: This plan is illustrative — it documents the intended curriculum
+    progression and hyperparameter choices but is not yet consumed by the
+    active training runners (run_grpo_training.py, grpo_notebook.py).
+    See those modules for the currently active training paths.
 
     This creates one ExperimentConfig per curriculum stage with:
         - Stage-appropriate hyperparameters

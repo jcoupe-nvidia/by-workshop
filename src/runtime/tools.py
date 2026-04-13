@@ -39,7 +39,11 @@ Call-order dependencies (machine-checkable):
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from typing import Any, Callable
+
+SIMULATION_DATE = datetime(2026, 4, 10)
+SIMULATION_DATE_STR = "2026-04-10"
 
 from src.scenario_data import (
     ORDERS,
@@ -302,10 +306,7 @@ def recommend_action(context: dict[str, Any]) -> dict[str, Any]:
         }
 
     lead_days = best.get("lead_days", 0)
-    # Compute expected delivery from today (2026-04-10)
-    from datetime import datetime, timedelta
-    today = datetime(2026, 4, 10)
-    expected = today + timedelta(days=lead_days)
+    expected = SIMULATION_DATE + timedelta(days=lead_days)
     expected_str = expected.strftime("%Y-%m-%d")
 
     try:

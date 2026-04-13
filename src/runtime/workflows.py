@@ -47,7 +47,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from src.runtime.tools import TOOL_REGISTRY
+from src.runtime.tools import SIMULATION_DATE, TOOL_REGISTRY
 
 # -- Workflow output types (structured intermediates) -------------------------
 
@@ -170,7 +170,11 @@ def _try_load_workflow_yaml() -> dict | None:
         import yaml
         with open(yaml_path) as f:
             return yaml.safe_load(f)
-    except Exception:
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning(
+            "Failed to load workflow_config.yaml: %s", exc,
+        )
         return None
 
 
@@ -247,8 +251,7 @@ def diagnose_order_risk(ctx: WorkflowContext) -> OrderRiskDiagnosis:
 
     # Determine risk: is the order at risk of missing the committed date?
     committed = datetime.strptime(order["committed_date"], "%Y-%m-%d")
-    today = datetime(2026, 4, 10)
-    days_remaining = (committed - today).days
+    days_remaining = (committed - SIMULATION_DATE).days
 
     is_at_risk = (
         shipment["status"] in ("pending", "delayed", "partial")

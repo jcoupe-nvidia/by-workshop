@@ -226,12 +226,31 @@ def apply_tool_call(
     if is_redundant:
         state.redundant_call_count += 1
 
-    # Record the call
+    # Update discovery facts (skips internally when tool_result has "error")
+    _update_discovery_facts(state, tool_name, tool_result)
+
+    # Business error: the call was structurally valid (correct name, met
+    # dependencies) but the tool returned an error.  Don't record it in
+    # tools_called so downstream dependencies remain unsatisfied.
+    if "error" in tool_result:
+        return StepResult(
+            valid=True,
+            state=state,
+            tool_name=tool_name,
+            is_redundant=is_redundant,
+            dependencies_satisfied=True,
+            is_progress=False,
+            is_terminal=state.is_terminal,
+            metadata={
+                "business_error": True,
+                "subgoals_done": len(state.completed_subgoals),
+                "total_subgoals": len(SUBGOAL_ORDER),
+            },
+        )
+
+    # Record the successful call
     state.tools_called.append(tool_name)
     state.tool_call_counts[tool_name] = state.tool_call_counts.get(tool_name, 0) + 1
-
-    # Update discovery facts
-    _update_discovery_facts(state, tool_name, tool_result)
 
     # Check subgoal completion
     subgoal_completed = _check_subgoal_completion(state, tool_name)

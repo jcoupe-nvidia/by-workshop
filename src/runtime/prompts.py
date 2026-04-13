@@ -14,7 +14,7 @@ Does NOT own:
 """
 from __future__ import annotations
 
-from src.runtime.tools import TOOL_REGISTRY, TOOL_DEPENDENCIES
+from src.runtime.tools import SIMULATION_DATE_STR, TOOL_REGISTRY, TOOL_DEPENDENCIES
 
 
 def build_system_prompt() -> str:
@@ -60,7 +60,7 @@ IMPORTANT RULES:
 5. The "thought" field is optional but encouraged for reasoning transparency.
 6. Always include all required arguments for each tool.
 
-Today's date is 2026-04-10."""
+Today's date is {SIMULATION_DATE_STR}."""
 
 
 def build_task_message(order_id: str) -> str:

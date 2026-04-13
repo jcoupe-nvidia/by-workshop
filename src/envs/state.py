@@ -78,7 +78,7 @@ TOOL_DEPENDENCIES: dict[str, set[str]] = {
     "get_transfer_eta": {"find_alternate_inventory"},
     "get_supplier_expedite_options": {"get_order"},
     "get_fulfillment_capacity": {"get_order"},
-    "score_recovery_options": {"find_alternate_inventory"},
+    "score_recovery_options": {"get_inventory"},
     "recommend_action": {"score_recovery_options"},
 }
 

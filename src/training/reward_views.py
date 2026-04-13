@@ -5,6 +5,18 @@ Bridges envs.rewards to what the training pipeline needs: stage-aware reward
 blending, component selection, and normalization for different training
 objectives (SFT cross-entropy, RL policy gradient, etc.).
 
+Reward semantics split (documented per MEDIUM-3 code review):
+    - Online (LateOrderTrainingEnv.step): Returns raw marginal per-step
+      rewards from envs.rewards.compute_step_reward(). These are the
+      environment's native dense rewards used directly by NeMo RL's GRPO.
+    - Offline (build_episode_reward_view): Applies stage-specific component
+      weights and step/trajectory blending from the curriculum config.
+      Used for JSONL export, datum group building, and offline analysis.
+
+    These are intentionally different: the online path gives the trainer
+    raw signal; the offline path shapes rewards for curriculum progression.
+    Both derive from the same underlying RewardSignal components.
+
 Owns:
     - Stage-aware reward blending (step vs trajectory weights per curriculum stage)
     - Reward component selection and masking per stage

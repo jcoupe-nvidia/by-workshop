@@ -24,6 +24,7 @@ Does NOT own:
 from __future__ import annotations
 
 import json
+import logging
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -72,12 +73,21 @@ class _NemoGymSession:
 # when accessed on the class.
 _sessions: dict[str, _NemoGymSession] = {}
 
+# Completed episodes persisted after terminal verify() so that
+# get_session_episode() and export_session_episodes() can still
+# retrieve them after the session is cleaned up (HIGH-3).
+# Values are (Episode, monotonic_timestamp) tuples for TTL sweeping.
+_completed_episodes: dict[str, tuple[Episode, float]] = {}
+
+logger = logging.getLogger(__name__)
+
 
 def _sweep_stale_sessions() -> None:
     """Remove sessions that have been inactive beyond the TTL.
 
     Called on each seed_session() to bound memory growth from leaked
     sessions (e.g., client crashed before sending terminal verify).
+    Also sweeps completed episodes older than 2x the session TTL.
     """
     now = time.monotonic()
     stale = [
@@ -85,12 +95,19 @@ def _sweep_stale_sessions() -> None:
         if (now - s.last_active) > _SESSION_TTL_SECONDS
     ]
     for sid in stale:
-        import logging
-        logging.getLogger(__name__).warning(
+        logger.warning(
             "Evicting stale NeMo Gym session %s (inactive %.0fs)",
             sid, now - _sessions[sid].last_active,
         )
         _sessions.pop(sid, None)
+
+    completed_ttl = _SESSION_TTL_SECONDS * 2
+    stale_completed = [
+        sid for sid, (_, ts) in _completed_episodes.items()
+        if (now - ts) > completed_ttl
+    ]
+    for sid in stale_completed:
+        _completed_episodes.pop(sid, None)
 
 
 class LateOrderResourceServer(SimpleResourcesServer):
@@ -124,6 +141,14 @@ class LateOrderResourceServer(SimpleResourcesServer):
         alongside scalar rewards.
         """
         _sweep_stale_sessions()
+
+        if len(_sessions) >= _SESSION_MAX_SIZE:
+            logger.warning(
+                "Session limit reached (%d); evicting oldest session",
+                _SESSION_MAX_SIZE,
+            )
+            oldest_id = min(_sessions, key=lambda sid: _sessions[sid].last_active)
+            _sessions.pop(oldest_id, None)
 
         # Import here to avoid circular dependency
         from src.envs.late_order_env import LateOrderRecoveryEnv
@@ -163,7 +188,27 @@ class LateOrderResourceServer(SimpleResourcesServer):
         runs the canonical validate → repair → reject → execute → record
         loop. This keeps envs/ focused on environment validation
         surfaces while rollouts/ owns the execution plumbing.
+
+        Guarded with try/except per RL_ARCHITECTURE.md § Verification
+        and Reward Design: default to reward 0.0 on unexpected failure
+        so that a single bad response does not crash rollout collection.
         """
+        try:
+            return await self._verify_inner(body)
+        except Exception:
+            session_id = getattr(body, "session_id", None)
+            logger.exception(
+                "verify() failed for session_id=%s; returning reward=0.0",
+                session_id,
+            )
+            return BaseVerifyResponse(
+                responses_create_params=body.responses_create_params,
+                response=body.response,
+                reward=0.0,
+            )
+
+    async def _verify_inner(self, body: BaseVerifyRequest) -> BaseVerifyResponse:
+        """Core verify logic, separated so the outer method can catch errors."""
         from src.rollouts.nemo_gym_rollouts import (
             AgentAction,
             process_agent_actions,
@@ -174,16 +219,22 @@ class LateOrderResourceServer(SimpleResourcesServer):
         actions = _extract_actions_from_response(body.response)
 
         # Enforce sequential tool execution: if the model batched multiple
-        # tool calls in one response, process only the first and return an
-        # observation asking for one-at-a-time calls (MEDIUM-7).
+        # tool calls in one response, process only the first and record
+        # the dropped calls for observability (MEDIUM-7 / MEDIUM-6).
         function_calls = [a for a in actions if a.action_type == "function_call"]
         if len(function_calls) > 1:
             actions = [function_calls[0]]
+            dropped_names = [a.tool_name for a in function_calls[1:]]
+            session.recorder.record_metadata("dropped_parallel_calls", {
+                "kept": function_calls[0].tool_name,
+                "dropped": dropped_names,
+                "reason": "sequential_execution_enforced",
+            })
 
         reward = process_agent_actions(actions, session.env, session.recorder)
 
         # Log decomposed reward components so they are available for
-        # offline analysis via the session's recorder events (MEDIUM-1).
+        # offline analysis via the session's recorder events.
         reward_summary = session.env.get_episode_reward_summary()
         session.recorder.record_metadata("reward_decomposition", {
             "step_rewards": [r.to_dict() for r in reward_summary.step_rewards],
@@ -196,10 +247,15 @@ class LateOrderResourceServer(SimpleResourcesServer):
         })
 
         # Clean up terminated sessions to prevent memory leaks during
-        # long training runs (RL_ARCHITECTURE.md line 337).
+        # long training runs (RL_ARCHITECTURE.md § Session State and Multi-Step Patterns).
+        # Persist the completed episode first so post-collection export still works.
         if session.env.is_terminal:
             session_id = getattr(body, "session_id", None)
             if session_id and session_id in _sessions:
+                episode = session.recorder.build_episode()
+                if not episode.env_state_init:
+                    episode.env_state_init = session.env.get_initial_state_snapshot()
+                _completed_episodes[session_id] = (episode, time.monotonic())
                 _sessions.pop(session_id, None)
 
         return BaseVerifyResponse(
@@ -246,15 +302,21 @@ class LateOrderResourceServer(SimpleResourcesServer):
         the episode carries the initial state snapshot for offline
         analysis and durable serialization.
 
+        Falls back to the completed-episodes registry so that episodes
+        remain accessible after terminal cleanup (HIGH-3).
+
         Returns None if the session_id is not found.
         """
         session = _sessions.get(session_id)
-        if session is None:
-            return None
-        episode = session.recorder.build_episode()
-        if not episode.env_state_init:
-            episode.env_state_init = session.env.get_initial_state_snapshot()
-        return episode
+        if session is not None:
+            episode = session.recorder.build_episode()
+            if not episode.env_state_init:
+                episode.env_state_init = session.env.get_initial_state_snapshot()
+            return episode
+        completed = _completed_episodes.get(session_id)
+        if completed is not None:
+            return completed[0]
+        return None
 
     @staticmethod
     def get_session_reward_summary(session_id: str):
@@ -445,6 +507,23 @@ class NemoGymResultRow:
         return d
 
 
+def _extract_scored_options_from_episode(episode: Episode) -> list[dict[str, Any]] | None:
+    """Extract ranked_options from the last score_recovery_options result in the episode."""
+    from src.rollouts.trace_types import ToolResultPayload, EventType
+    for event in reversed(episode.events):
+        if event.event_type != EventType.TOOL_RESULT:
+            continue
+        payload = event.payload
+        if not isinstance(payload, ToolResultPayload):
+            continue
+        if payload.tool_name != "score_recovery_options":
+            continue
+        result = payload.result
+        if isinstance(result, dict) and "ranked_options" in result:
+            return result["ranked_options"]
+    return None
+
+
 def episode_to_nemo_gym_row(
     episode: Episode,
     reward_summary: EpisodeRewardSummary,
@@ -476,12 +555,17 @@ def episode_to_nemo_gym_row(
 
     total_penalties = sum(reward_summary.penalty_counts.values())
 
-    # Determine task success
-    task_success = 0
-    if episode.terminal and episode.terminal.final_answer:
-        action = episode.terminal.final_answer.get("action", "")
-        if action and action != "escalate":
-            task_success = 1
+    # Determine task success via the shared evaluator
+    from src.envs.rewards import task_success_facts
+    final_answer = episode.terminal.final_answer if episode.terminal else None
+    scored = _extract_scored_options_from_episode(episode)
+    success_info = task_success_facts(
+        final_answer=final_answer,
+        order_id=episode.task_id,
+        scored_options=scored,
+        is_complete=episode.is_complete,
+    )
+    task_success = 1 if success_info["success"] else 0
 
     # Build response metadata
     response: dict[str, Any] = {

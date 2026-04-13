@@ -40,6 +40,7 @@ from src.envs.rewards import (
     get_expected_arguments,
     OPTIMAL_TOOL_SEQUENCE,
     get_optimal_tool_sequence,
+    task_success_facts,
 )
 
 
@@ -253,56 +254,63 @@ def eval_sequence_correctness(episode: Episode) -> DimensionScore:
 def eval_task_success(episode: Episode) -> DimensionScore:
     """Did the agent reach a valid and factually grounded recommendation?
 
-    Checks three layers:
-        1. Structural: episode completed, final_answer present, required fields.
-        2. Grounding: the recommended action references a feasible option that
-           appeared in a prior ``score_recovery_options`` result.
-        3. Optional quality: confidence and expected_delivery present.
+    Delegates to ``task_success_facts()`` in ``src.envs.rewards`` — the
+    single source of truth for task success — then maps the result to a
+    0-1 score with bonus for optional answer fields.
     """
-    if not episode.is_complete or episode.final_answer is None:
-        reason = "incomplete" if not episode.is_complete else "no final answer"
-        return DimensionScore("task_success", 0.0, 1.0, f"Agent did not complete: {reason}.")
-
-    answer = episode.final_answer
-    required_fields = {"action", "rationale"}
-    present = set(answer.keys()) & required_fields
-    missing = required_fields - present
-
-    if missing:
-        score = len(present) / len(required_fields)
-        details = f"Final answer missing fields: {missing}."
-        return DimensionScore("task_success", round(score, 3), 1.0, details)
-
-    structural_score = 0.7
-    grounding_score = 0.0
-    grounding_detail = ""
-
+    order_id = _extract_order_id(episode)
     scored_options = _extract_scored_options(episode)
-    if scored_options is not None:
-        action_text = str(answer.get("action", "")).lower()
-        matched = any(
-            action_text and (
-                action_text in str(opt.get("description", "")).lower()
-                or action_text in str(opt.get("source", "")).lower()
-                or action_text in str(opt.get("supplier", "")).lower()
-            )
-            for opt in scored_options
-        )
-        if matched:
-            grounding_score = 0.2
-            grounding_detail = " Grounded in scored options."
-        else:
-            grounding_detail = " Action not found in scored recovery options."
-    else:
-        grounding_detail = " No score_recovery_options result to verify against."
 
+    facts = task_success_facts(
+        final_answer=episode.final_answer,
+        order_id=order_id,
+        scored_options=scored_options,
+        is_complete=episode.is_complete,
+    )
+
+    if not facts["structural_ok"]:
+        if episode.final_answer is None or not episode.is_complete:
+            return DimensionScore(
+                "task_success", 0.0, 1.0,
+                f"Agent did not complete: {facts['reason']}.",
+            )
+        present_count = len(
+            set(episode.final_answer.keys()) & {"action", "rationale"}
+        )
+        score = present_count / 2
+        return DimensionScore(
+            "task_success", round(score, 3), 1.0,
+            f"Final answer missing fields: {facts['reason']}.",
+        )
+
+    # Structural fields present — build composite score
+    base_score = 0.7
+
+    if facts["action_correct"]:
+        base_score += 0.15
+    if facts["grounded"]:
+        base_score += 0.05
+    elif scored_options is not None:
+        pass  # no bonus, but no penalty at the eval layer
+
+    answer = episode.final_answer or {}
     has_confidence = "confidence" in answer
     has_delivery = "expected_delivery" in answer
     optional_score = 0.1 * sum([has_confidence, has_delivery]) / 2
 
-    score = min(1.0, structural_score + grounding_score + optional_score)
+    score = min(1.0, base_score + optional_score)
+
     details = f"Valid final answer with action='{answer.get('action', '?')}'."
-    details += grounding_detail
+    if facts["action_correct"]:
+        details += " Action matches expected."
+    else:
+        details += f" {facts['reason']}."
+    if facts["grounded"]:
+        details += " Grounded in scored options."
+    elif scored_options is not None:
+        details += " Action not found in scored recovery options."
+    else:
+        details += " No score_recovery_options result to verify against."
     if not has_confidence or not has_delivery:
         extras = []
         if not has_confidence:
@@ -310,6 +318,7 @@ def eval_task_success(episode: Episode) -> DimensionScore:
         if not has_delivery:
             extras.append("expected_delivery")
         details += f" Missing optional: {extras}."
+
     return DimensionScore("task_success", round(score, 3), 1.0, details)
 
 

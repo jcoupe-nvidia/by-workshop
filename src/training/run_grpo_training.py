@@ -48,6 +48,13 @@ from nemo_rl.utils.logger import get_next_experiment_dir
 OmegaConf.register_new_resolver("mul", lambda a, b: a * b)
 
 # ---------------------------------------------------------------------------
+# Curriculum experiment plan
+# ---------------------------------------------------------------------------
+# See training.experiments for the illustrative 4-stage curriculum plan
+# (ExperimentPlan / build_default_experiment_plan). That plan documents
+# the intended progression but is not yet wired into this runner.
+
+# ---------------------------------------------------------------------------
 # Scenario prompts — use canonical system prompt from shared module
 # ---------------------------------------------------------------------------
 
@@ -335,6 +342,7 @@ class LateOrderTrainingEnv(EnvironmentInterface[LateOrderMetadata]):
         self.max_steps = self.cfg.get("max_steps", MAX_STEPS)
         self._envs: dict[int, Any] = {}
         self._tool_registry: dict[str, Any] | None = None
+        self._profiling_done = False
 
     def _get_tool_registry(self) -> dict[str, Any]:
         # Lazy import of tool implementations from runtime/.  The training
@@ -400,6 +408,8 @@ class LateOrderTrainingEnv(EnvironmentInterface[LateOrderMetadata]):
 
             env = self._get_or_create_env(episode_idx, order_id=order_id)
 
+            # Returns raw marginal rewards (not shaped). See reward_views.py for
+            # the offline shaped reward path and the documented reward semantics split.
             marginal_reward = 0.0
             new_messages_processed = messages_processed
             is_done = env.is_terminal
@@ -487,6 +497,23 @@ class LateOrderTrainingEnv(EnvironmentInterface[LateOrderMetadata]):
             if len(final_rewards) > 0
             else 0.0
         )
+
+        if not self._profiling_done:
+            self._profiling_done = True
+            if len(final_rewards) > 0:
+                from src.training.grpo_notebook import profile_reward_distribution
+                pilot_specs = [
+                    {"extra_env_info": {"reward": float(r)}}
+                    for r in final_rewards
+                ]
+                profile = profile_reward_distribution(pilot_specs, label="post-first-step")
+                if not profile["pass"]:
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        "Degenerate reward distribution detected after first step. "
+                        "GRPO training may not provide useful signal."
+                    )
+
         return batch, {
             "mean_reward": round(mean_reward, 4),
             "tool_call_success_rate": round(success_rate, 4),
@@ -578,7 +605,7 @@ class LateOrderDataset(IterableDataset):
                 "messages_processed": 0,
                 "cumulative_reward": 0.0,
                 "parallel_tool_calls": False,
-                # Async GRPO metadata placeholders (RL_ARCHITECTURE.md lines 68-77).
+                # Async GRPO metadata placeholders (RL_ARCHITECTURE.md § Async Metadata Contract).
                 # Present with synchronous defaults so the contract is visible
                 # in serialized output and ready for async collection.
                 "gen_weight_version": 0,
@@ -676,41 +703,11 @@ def main() -> None:
     task_to_env = {"late_order_recovery": env}
     val_task_to_env = task_to_env
 
-    # Reward distribution profiling gate (RL_ARCHITECTURE.md line 279).
-    # NOTE: Profiling is deferred to the post_process callback of the first
-    # training step, where actual model-generated rewards are available.
-    # Profiling input DatumSpecs (which have no model responses yet) would
-    # always report all-zero rewards, making the gate useless (MEDIUM-6).
-    _reward_profiling_done = False
-
-    class _RewardProfilingCallback:
-        """One-shot callback that profiles reward distribution after the
-        first training step, when actual model-generated rewards exist."""
-
-        def __init__(self):
-            self.done = False
-
-        def maybe_profile(self, batch: dict) -> None:
-            if self.done:
-                return
-            self.done = True
-            from src.training.grpo_notebook import profile_reward_distribution
-            rewards_tensor = batch.get("total_reward")
-            if rewards_tensor is not None and len(rewards_tensor) > 0:
-                pilot_specs = [
-                    {"extra_env_info": {"reward": float(r)}}
-                    for r in rewards_tensor
-                ]
-                profile = profile_reward_distribution(pilot_specs, label="post-first-step")
-                if not profile["pass"]:
-                    print(
-                        "WARNING: Degenerate reward distribution detected after first step. "
-                        "GRPO training may not provide useful signal. Consider adjusting "
-                        "temperature, prompt diversity, or verification thresholds."
-                    )
-
-    _profiling_cb = _RewardProfilingCallback()
-    print("\nReward distribution profiling deferred to after first training step.")
+    # Reward distribution profiling is handled inside
+    # LateOrderTrainingEnv.global_post_process_and_metrics() as a one-shot
+    # check after the first training step, where actual model-generated
+    # rewards are available (RL_ARCHITECTURE.md § Verification and Reward Design).
+    print("\nReward distribution profiling will run in the environment's post-process hook after the first step.")
 
     print("\nStarting GRPO training...")
     grpo_train(

@@ -247,6 +247,16 @@ def process_agent_actions(
 ) -> float:
     """Process a sequence of agent actions, accumulating reward.
 
+    This is the **training-time** execution path, called by the NeMo Gym
+    resource server's ``verify()`` during rollout collection.  The
+    interactive demo path lives in ``runtime/agent.py`` and uses its own
+    ``EpisodeRecorder``.  Both paths share the core validation logic via
+    ``src.runtime.execution.validate_and_repair()``, which ensures
+    identical validate → repair → reject semantics regardless of caller.
+    Divergence between the two paths is therefore limited to how
+    environment interaction (``env.step``, ``env.record_invalid``, etc.)
+    is wired around the shared validation core.
+
     Args:
         actions: Ordered list of AgentActions to process.
         env: The LateOrderRecoveryEnv managing task state.
