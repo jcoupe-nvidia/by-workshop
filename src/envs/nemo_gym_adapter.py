@@ -24,6 +24,7 @@ Does NOT own:
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
@@ -46,6 +47,10 @@ from src.runtime.tracing import EpisodeRecorder
 # NeMo Gym resource server (seed + verify protocol)
 # ---------------------------------------------------------------------------
 
+_SESSION_TTL_SECONDS = 300  # 5-minute inactivity TTL
+_SESSION_MAX_SIZE = 1000  # safety cap on concurrent sessions
+
+
 @dataclass
 class _NemoGymSession:
     """Per-session state holding both the environment and an EpisodeRecorder.
@@ -57,6 +62,7 @@ class _NemoGymSession:
     """
     env: Any  # LateOrderRecoveryEnv
     recorder: EpisodeRecorder
+    last_active: float = field(default_factory=time.monotonic)
 
 
 # Per-session state, keyed by stable session_id (UUID).
@@ -65,6 +71,26 @@ class _NemoGymSession:
 # attributes as ModelPrivateAttr descriptors — which breaks dict operations
 # when accessed on the class.
 _sessions: dict[str, _NemoGymSession] = {}
+
+
+def _sweep_stale_sessions() -> None:
+    """Remove sessions that have been inactive beyond the TTL.
+
+    Called on each seed_session() to bound memory growth from leaked
+    sessions (e.g., client crashed before sending terminal verify).
+    """
+    now = time.monotonic()
+    stale = [
+        sid for sid, s in _sessions.items()
+        if (now - s.last_active) > _SESSION_TTL_SECONDS
+    ]
+    for sid in stale:
+        import logging
+        logging.getLogger(__name__).warning(
+            "Evicting stale NeMo Gym session %s (inactive %.0fs)",
+            sid, now - _sessions[sid].last_active,
+        )
+        _sessions.pop(sid, None)
 
 
 class LateOrderResourceServer(SimpleResourcesServer):
@@ -97,6 +123,8 @@ class LateOrderResourceServer(SimpleResourcesServer):
         EpisodeRecorder so that verify() emits canonical Event records
         alongside scalar rewards.
         """
+        _sweep_stale_sessions()
+
         # Import here to avoid circular dependency
         from src.envs.late_order_env import LateOrderRecoveryEnv
 
@@ -142,8 +170,30 @@ class LateOrderResourceServer(SimpleResourcesServer):
         )
 
         session = self._get_session(body)
+        session.last_active = time.monotonic()
         actions = _extract_actions_from_response(body.response)
+
+        # Enforce sequential tool execution: if the model batched multiple
+        # tool calls in one response, process only the first and return an
+        # observation asking for one-at-a-time calls (MEDIUM-7).
+        function_calls = [a for a in actions if a.action_type == "function_call"]
+        if len(function_calls) > 1:
+            actions = [function_calls[0]]
+
         reward = process_agent_actions(actions, session.env, session.recorder)
+
+        # Log decomposed reward components so they are available for
+        # offline analysis via the session's recorder events (MEDIUM-1).
+        reward_summary = session.env.get_episode_reward_summary()
+        session.recorder.record_metadata("reward_decomposition", {
+            "step_rewards": [r.to_dict() for r in reward_summary.step_rewards],
+            "terminal_reward": (
+                reward_summary.terminal_reward.to_dict()
+                if reward_summary.terminal_reward else None
+            ),
+            "total_reward": reward_summary.total_reward,
+            "penalty_counts": reward_summary.penalty_counts,
+        })
 
         # Clean up terminated sessions to prevent memory leaks during
         # long training runs (RL_ARCHITECTURE.md line 337).

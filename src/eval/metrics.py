@@ -35,7 +35,12 @@ from src.rollouts.trace_types import (
 )
 from src.envs.state import TOOL_DEPENDENCIES
 from src.envs.state import SUBGOAL_ORDER, TOOL_TO_SUBGOAL, Subgoal
-from src.envs.rewards import EXPECTED_ARGUMENTS, get_expected_arguments, OPTIMAL_TOOL_SEQUENCE
+from src.envs.rewards import (
+    EXPECTED_ARGUMENTS,
+    get_expected_arguments,
+    OPTIMAL_TOOL_SEQUENCE,
+    get_optimal_tool_sequence,
+)
 
 
 # -- Evaluation dimensions -------------------------------------------------
@@ -367,15 +372,18 @@ def eval_recovery_quality(episode: Episode) -> DimensionScore:
 def eval_efficiency(episode: Episode) -> DimensionScore:
     """How many tool-call attempts did the agent make vs. the optimal trajectory?
 
-    The optimal SO-10482 trajectory uses 9 tool calls (all tools once).
-    Extra attempts (retries, invalid calls) reduce the score.
+    Uses the per-scenario optimal tool sequence so that false-alarm scenarios
+    (which need fewer tools) are not penalized for stopping early.
 
     Compares optimal tool-call count against total tool-call attempts
     (valid + invalid) to keep units consistent.  metrics.total_steps is
     the raw event count (which includes results, thoughts, etc.) and
     should not be compared against a tool-call count.
     """
-    optimal_count = len(OPTIMAL_TOOL_SEQUENCE)
+    order_id = _extract_order_id(episode)
+    optimal_seq = get_optimal_tool_sequence(order_id)
+    optimal_count = len(optimal_seq)
+
     valid_calls = episode.metrics.valid_tool_calls
     invalid_calls = episode.metrics.invalid_tool_calls
     total_attempts = valid_calls + invalid_calls
@@ -383,14 +391,12 @@ def eval_efficiency(episode: Episode) -> DimensionScore:
     if total_attempts == 0:
         return DimensionScore("efficiency", 0.0, 1.0, "No tool call attempts.")
 
-    # Ratio of optimal to actual attempts (capped at 1.0)
-    # Uses total tool-call attempts (valid + invalid) so the units match
     score = min(1.0, optimal_count / total_attempts)
 
     details = (
         f"{valid_calls} valid tool calls, {invalid_calls} invalid, "
         f"{total_attempts} total attempts "
-        f"(optimal: {optimal_count}). "
+        f"(optimal for {order_id}: {optimal_count}). "
         f"Efficiency ratio: {score:.2f}."
     )
     return DimensionScore("efficiency", round(score, 3), 1.0, details)

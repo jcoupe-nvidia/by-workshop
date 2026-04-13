@@ -294,6 +294,15 @@ def _process_single_assistant_message(
     tool_name = result.tool_name
     arguments = result.arguments
 
+    # Check dependencies before executing — training-time enforcement must
+    # match the interactive runtime (HIGH-3 train-eval parity fix).
+    from src.envs.transitions import check_preconditions
+    ok, err_type, err_msg = check_preconditions(env.state, tool_name)
+    if not ok:
+        env.record_invalid(err_type or "dependency_violation", err_msg or "Precondition failed")
+        step_reward = env.get_step_reward(env.get_step_count() - 1)
+        return (step_reward.total if step_reward else 0.0), env.is_terminal
+
     fn, _, _ = tool_registry[tool_name]
     try:
         tool_result = fn(**arguments)
@@ -378,7 +387,13 @@ class LateOrderTrainingEnv(EnvironmentInterface[LateOrderMetadata]):
                 continue
 
             step_num = meta.get("step_num", 0) + 1
-            episode_idx = meta.get("episode_idx", id(meta))
+            episode_idx = meta.get("episode_idx")
+            if episode_idx is None:
+                raise ValueError(
+                    "episode_idx must be set in metadata — "
+                    "falling back to id(meta) risks session collisions "
+                    "under concurrent rollout collection"
+                )
             messages_processed = meta.get("messages_processed", 0)
             cumulative_reward = meta.get("cumulative_reward", 0.0)
             order_id = meta.get("order_id", "SO-10482")
@@ -662,24 +677,40 @@ def main() -> None:
     val_task_to_env = task_to_env
 
     # Reward distribution profiling gate (RL_ARCHITECTURE.md line 279).
-    # Collect a small pilot batch to verify reward variance before training.
-    print("\nProfiling reward distribution on pilot batch...")
-    from src.training.grpo_notebook import profile_reward_distribution
-    pilot_specs: list[dict[str, Any]] = []
-    pilot_iter = iter(train_dataset)
-    for _ in range(min(8, ds_length)):
-        try:
-            pilot_specs.append(next(pilot_iter))
-        except StopIteration:
-            break
-    if pilot_specs:
-        profile = profile_reward_distribution(pilot_specs, label="pilot")
-        if not profile["pass"]:
-            print(
-                "WARNING: Degenerate reward distribution detected in pilot batch. "
-                "GRPO training may not provide useful signal. Consider adjusting "
-                "temperature, prompt diversity, or verification thresholds."
-            )
+    # NOTE: Profiling is deferred to the post_process callback of the first
+    # training step, where actual model-generated rewards are available.
+    # Profiling input DatumSpecs (which have no model responses yet) would
+    # always report all-zero rewards, making the gate useless (MEDIUM-6).
+    _reward_profiling_done = False
+
+    class _RewardProfilingCallback:
+        """One-shot callback that profiles reward distribution after the
+        first training step, when actual model-generated rewards exist."""
+
+        def __init__(self):
+            self.done = False
+
+        def maybe_profile(self, batch: dict) -> None:
+            if self.done:
+                return
+            self.done = True
+            from src.training.grpo_notebook import profile_reward_distribution
+            rewards_tensor = batch.get("total_reward")
+            if rewards_tensor is not None and len(rewards_tensor) > 0:
+                pilot_specs = [
+                    {"extra_env_info": {"reward": float(r)}}
+                    for r in rewards_tensor
+                ]
+                profile = profile_reward_distribution(pilot_specs, label="post-first-step")
+                if not profile["pass"]:
+                    print(
+                        "WARNING: Degenerate reward distribution detected after first step. "
+                        "GRPO training may not provide useful signal. Consider adjusting "
+                        "temperature, prompt diversity, or verification thresholds."
+                    )
+
+    _profiling_cb = _RewardProfilingCallback()
+    print("\nReward distribution profiling deferred to after first training step.")
 
     print("\nStarting GRPO training...")
     grpo_train(

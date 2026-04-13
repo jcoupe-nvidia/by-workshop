@@ -244,6 +244,7 @@ python -m pip install \
   "ipykernel<8" \
   "nvidia-nat" \
   "nemo-gym==0.2.0" \
+  nest_asyncio \
   requests
 ```
 

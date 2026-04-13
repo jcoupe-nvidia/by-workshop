@@ -393,9 +393,15 @@ def build_grpo_datum_group(
             group_data.append((record, shaped_reward, per_step))
 
         group_mean = sum(group_rewards) / len(group_rewards) if group_rewards else 0.0
+        group_var = (
+            sum((r - group_mean) ** 2 for r in group_rewards) / len(group_rewards)
+            if group_rewards else 0.0
+        )
+        group_std = max(group_var ** 0.5, 1e-8)
 
         for record, shaped_reward, per_step in group_data:
-            advantage = round(shaped_reward - group_mean, 4)
+            z_score = (shaped_reward - group_mean) / group_std
+            advantage = round(max(-5.0, min(5.0, z_score)), 4)
 
             datum = episode_to_datum_spec(
                 episode=record.episode,

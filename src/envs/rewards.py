@@ -99,7 +99,11 @@ def get_expected_arguments(order_id: str) -> dict[str, dict[str, Any]]:
 # Backward-compatible alias: default to SO-10482 for existing call sites
 EXPECTED_ARGUMENTS: dict[str, dict[str, Any]] = get_expected_arguments("SO-10482")
 
-OPTIMAL_TOOL_SEQUENCE = [
+
+# -- Per-scenario optimal tool sequences and expected actions ------------------
+
+# Canonical full sequence used as default and for backward compatibility.
+_FULL_TOOL_SEQUENCE = [
     "get_order",
     "get_shipment_status",
     "get_inventory",
@@ -111,6 +115,63 @@ OPTIMAL_TOOL_SEQUENCE = [
     "recommend_action",
 ]
 
+# Per-scenario expected optimal action derived from scenario_data.py comments.
+EXPECTED_ACTION: dict[str, str] = {
+    "SO-10482": "transfer",
+    "SO-10483": "supplier_expedite",
+    "SO-10484": "partial_fulfillment",
+    "SO-10485": "fulfill_from_source",
+    "SO-10486": "substitute",
+    "SO-10487": "escalate",
+    "SO-10488": "transfer",
+    "SO-10489": "supplier_expedite",
+    "SO-10490": "fulfill_from_source",
+    "SO-10491": "transfer",
+}
+
+# "False alarm" scenarios where the original DC can fulfill — the agent
+# should stop after diagnosing that no recovery is needed.
+_FALSE_ALARM_SEQUENCE = [
+    "get_order",
+    "get_shipment_status",
+    "get_inventory",
+    "get_fulfillment_capacity",
+    "score_recovery_options",
+    "recommend_action",
+]
+
+# Scenarios requiring the full alternate-sourcing investigation.
+_FULL_INVESTIGATION_IDS = {
+    "SO-10482", "SO-10483", "SO-10484",
+    "SO-10486", "SO-10487", "SO-10488", "SO-10489", "SO-10491",
+}
+_FALSE_ALARM_IDS = {"SO-10485", "SO-10490"}
+
+
+def get_optimal_tool_sequence(order_id: str) -> list[str]:
+    """Return the minimal dependency-satisfying tool sequence for a scenario.
+
+    False-alarm scenarios (SO-10485, SO-10490) omit alternate-sourcing tools
+    because the agent should recognize that the order can ship from the
+    original DC without needing transfers or supplier expedites.
+    """
+    if order_id in _FALSE_ALARM_IDS:
+        return list(_FALSE_ALARM_SEQUENCE)
+    return list(_FULL_TOOL_SEQUENCE)
+
+
+def get_optimal_step_count(order_id: str) -> int:
+    """Return the number of steps in the optimal trajectory for a scenario."""
+    return len(get_optimal_tool_sequence(order_id))
+
+
+def get_expected_action(order_id: str) -> str:
+    """Return the expected optimal recovery action for a scenario."""
+    return EXPECTED_ACTION.get(order_id, "unknown")
+
+
+# Backward-compatible module-level aliases (default to full sequence).
+OPTIMAL_TOOL_SEQUENCE = list(_FULL_TOOL_SEQUENCE)
 OPTIMAL_STEP_COUNT = len(OPTIMAL_TOOL_SEQUENCE)
 
 # Tools that are considered "correct" at each subgoal phase
@@ -286,12 +347,13 @@ def compute_step_reward(
     else:
         signal.progress = 0.0
 
-    # -- Efficiency --
+    # -- Efficiency (per-scenario optimal step count) --
+    scenario_optimal = get_optimal_step_count(state.order_id)
     valid_calls = state.valid_tool_call_count
-    if valid_calls <= OPTIMAL_STEP_COUNT:
+    if valid_calls <= scenario_optimal:
         signal.efficiency = 1.0
     else:
-        overshoot = valid_calls - OPTIMAL_STEP_COUNT
+        overshoot = valid_calls - scenario_optimal
         signal.efficiency = max(-1.0, PENALTY_OVERLONG_EPISODE * overshoot)
         if overshoot > 0:
             signal.penalties.append("overlong_episode")
@@ -365,6 +427,18 @@ def compute_terminal_reward(
         penalty = (1.0 - subgoal_ratio) * 0.3
         base_score -= penalty
         signal.penalties.append("incomplete_subgoals")
+
+    # Outcome correctness: does the recommended action match the expected
+    # optimal action for this scenario? (closes MEDIUM-3 / composite
+    # verification requirement from RL_ARCHITECTURE.md lines 303-304)
+    expected = get_expected_action(state.order_id)
+    recommended = str(answer.get("action", "")).lower().strip()
+    if expected != "unknown" and recommended:
+        if expected in recommended or recommended in expected:
+            base_score += 0.2
+        else:
+            base_score -= 0.1
+            signal.penalties.append("wrong_action")
 
     signal.terminal_quality = round(min(1.0, max(-1.0, base_score)), 3)
     return signal

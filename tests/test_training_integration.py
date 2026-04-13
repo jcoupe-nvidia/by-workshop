@@ -527,7 +527,8 @@ class TestVerifyAsyncPath:
         self._cleanup()
 
     def test_multiple_tool_calls_in_one_response(self):
-        """Multiple function_call items in one response should each be processed."""
+        """Multiple function_call items in one response: only the first is
+        processed (parallel_tool_calls enforcement, MEDIUM-7)."""
         server, sid, env = self._make_server()
 
         items = [
@@ -538,7 +539,7 @@ class TestVerifyAsyncPath:
 
         resp = asyncio.run(server.verify(req))
 
-        assert len(env._step_rewards) == 2
+        assert len(env._step_rewards) == 1
         assert resp.reward != 0.0
         self._cleanup()
 

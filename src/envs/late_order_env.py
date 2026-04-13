@@ -67,6 +67,8 @@ from src.envs.rewards import (
     OPTIMAL_TOOL_SEQUENCE,
     OPTIMAL_STEP_COUNT,
     CORRECT_TOOLS_BY_SUBGOAL,
+    get_optimal_tool_sequence,
+    get_optimal_step_count,
 )
 from src.envs.state import TOOL_DEPENDENCIES
 
@@ -283,14 +285,14 @@ class LateOrderRecoveryEnv:
         return get_expected_arguments(order_id)
 
     @staticmethod
-    def optimal_tool_sequence() -> list[str]:
-        """Return the optimal tool call sequence (same for all scenarios)."""
-        return list(OPTIMAL_TOOL_SEQUENCE)
+    def optimal_tool_sequence(order_id: str = "SO-10482") -> list[str]:
+        """Return the optimal tool call sequence for a scenario."""
+        return get_optimal_tool_sequence(order_id)
 
     @staticmethod
-    def optimal_step_count() -> int:
+    def optimal_step_count(order_id: str = "SO-10482") -> int:
         """Return the number of steps in the optimal trajectory."""
-        return OPTIMAL_STEP_COUNT
+        return get_optimal_step_count(order_id)
 
     @staticmethod
     def tool_dependencies() -> dict[str, set[str]]:

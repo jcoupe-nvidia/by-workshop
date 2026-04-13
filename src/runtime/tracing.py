@@ -212,6 +212,16 @@ class EpisodeRecorder:
             ),
         ))
 
+    def record_metadata(self, key: str, value: Any) -> None:
+        """Attach arbitrary metadata to the episode for offline analysis.
+
+        Metadata is stored on the Episode.metadata dict, making it
+        available via session inspection and serialized artifacts.
+        """
+        if not hasattr(self, "_metadata"):
+            self._metadata: dict[str, Any] = {}
+        self._metadata[key] = value
+
     def increment_model_calls(self) -> None:
         """Increment the model call counter."""
         self._model_calls += 1
@@ -242,7 +252,7 @@ class EpisodeRecorder:
             total_reward=total_reward,
         )
 
-        return Episode(
+        ep = Episode(
             episode_id=self.episode_id,
             task_id=self.task_id,
             task_prompt=self.task_prompt,
@@ -252,3 +262,6 @@ class EpisodeRecorder:
             terminal=terminal,
             metrics=metrics,
         )
+        if hasattr(self, "_metadata"):
+            ep.metadata.update(self._metadata)
+        return ep

@@ -393,25 +393,82 @@ def _live_train(
     datum_specs: list[dict[str, Any]],
     stage_config: StageConfig,
 ) -> dict[str, float]:
-    """Attempt a real NeMo RL training step.
+    """Run a real NeMo RL GRPO training step.
 
-    Intentional scope boundary: notebook-embedded training requires a
-    fully configured policy model, tokenizer, and distributed GPU
-    resources that are not available in the notebook context. The
-    notebook demonstrates rollout collection, datum group assembly,
-    and artifact export. For full GRPO training, use the CLI entrypoint:
-
-        python -m src.training.run_grpo_training
-
-    The ``run_grpo_notebook(dry_run=False)`` path catches this error
-    and falls back to dry-run mode automatically, reporting the reason.
+    Delegates to the same infrastructure as ``python -m src.training.run_grpo_training``
+    but skips CLI argument parsing.  Requires GPU resources (7 GPUs per
+    ``grpo_config.yaml``) and the model weights at the configured path.
+    When GPUs are unavailable, ``run_grpo_notebook(dry_run=False)``
+    catches the error and falls back to dry-run automatically.
     """
-    raise RuntimeError(
-        "Live NeMo RL training requires a fully configured policy model, "
-        "tokenizer, and distributed GPU resources. Use the CLI entrypoint "
-        "(python -m src.training.run_grpo_training) with the appropriate "
-        "Hydra config for full training."
+    import pprint
+    from omegaconf import OmegaConf
+
+    from nemo_rl.algorithms.grpo import MasterConfig, grpo_train, setup
+    from nemo_rl.algorithms.utils import get_tokenizer, set_seed
+    from nemo_rl.models.generation import configure_generation_config
+    from nemo_rl.utils.config import load_config
+    from nemo_rl.utils.logger import get_next_experiment_dir
+    from nemo_rl.distributed.virtual_cluster import init_ray
+
+    from src.training.run_grpo_training import (
+        LateOrderDataset,
+        LateOrderTrainingEnv,
     )
+
+    OmegaConf.register_new_resolver("mul", lambda a, b: a * b, replace=True)
+
+    config_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "grpo_config.yaml",
+    )
+    config = load_config(config_path)
+    config: MasterConfig = OmegaConf.to_container(config, resolve=True)
+
+    config["logger"]["log_dir"] = get_next_experiment_dir(config["logger"]["log_dir"])
+
+    init_ray()
+    set_seed(config["grpo"]["seed"])
+
+    tokenizer = get_tokenizer(config["policy"]["tokenizer"])
+    config["policy"]["generation"] = configure_generation_config(
+        config["policy"]["generation"], tokenizer,
+    )
+
+    ds_length = (
+        config["grpo"]["num_prompts_per_step"]
+        * config["grpo"]["num_generations_per_prompt"]
+        * config["grpo"]["max_num_steps"]
+    )
+    train_dataset = LateOrderDataset(tokenizer=tokenizer, length=ds_length)
+    val_dataset = LateOrderDataset(
+        tokenizer=tokenizer, length=config["grpo"]["max_val_samples"],
+    )
+
+    (
+        policy, policy_generation, cluster,
+        dataloader, val_dataloader,
+        loss_fn, logger, checkpointer,
+        grpo_state, master_config,
+    ) = setup(config, tokenizer, train_dataset, val_dataset)
+
+    import ray
+    env = LateOrderTrainingEnv.options(num_gpus=0).remote(
+        cfg=dict(config["env"]["late_order_recovery"]),
+    )
+    task_to_env = {"late_order_recovery": env}
+
+    grpo_train(
+        policy, policy_generation,
+        dataloader, val_dataloader, tokenizer,
+        loss_fn, task_to_env, task_to_env,
+        logger, checkpointer, grpo_state, master_config,
+    )
+
+    return {
+        "step": config["grpo"]["max_num_steps"],
+        "num_datum_specs": len(datum_specs),
+        "training_backend": "nemo_rl",
+    }
 
 
 # ---------------------------------------------------------------------------

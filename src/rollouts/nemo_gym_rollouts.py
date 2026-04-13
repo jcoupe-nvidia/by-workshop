@@ -42,6 +42,30 @@ from src.rollouts.trace_types import Episode, EventType, ToolCallPayload
 
 
 # ---------------------------------------------------------------------------
+# Async helper — Jupyter-compatible coroutine runner
+# ---------------------------------------------------------------------------
+
+def _run_async(coro):
+    """Run an async coroutine in both Jupyter and non-Jupyter contexts.
+
+    Uses asyncio.run() for standalone scripts. Falls back to
+    get_event_loop().run_until_complete() when an event loop is already
+    running (e.g., inside Jupyter notebooks).
+    """
+    import asyncio
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop is not None and loop.is_running():
+        import nest_asyncio
+        nest_asyncio.apply()
+        return loop.run_until_complete(coro)
+    return asyncio.run(coro)
+
+
+# ---------------------------------------------------------------------------
 # Training-time execution pipeline
 # ---------------------------------------------------------------------------
 # This section owns the canonical validate → repair → reject → execute →
@@ -688,7 +712,7 @@ def collect_via_resource_server(
     # BaseSeedSessionResponse doesn't carry it as a field.
     pre_keys = set(_sessions.keys())
     seed_req = BaseSeedSessionRequest()
-    asyncio.run(server.seed_session(seed_req))
+    _run_async(server.seed_session(seed_req))
     new_keys = set(_sessions.keys()) - pre_keys
     session_id = new_keys.pop()
 
@@ -699,7 +723,7 @@ def collect_via_resource_server(
     # Step 2: verify — send each action as a NeMo Gym response
     for action in actions:
         verify_req = _build_verify_request_from_action(action, session_id)
-        asyncio.run(server.verify(verify_req))
+        _run_async(server.verify(verify_req))
 
     # Step 3: Retrieve the episode and reward from the session
     episode = session.recorder.build_episode()
