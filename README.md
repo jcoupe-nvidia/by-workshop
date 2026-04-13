@@ -166,9 +166,28 @@ Malformed outputs are handled explicitly through repair or reject logic rather t
 
 ## Prerequisites
 
-This repo runs inside the `nemo-rl` container. GPU access is required.
+This repo requires two containers running on a GPU machine: one serving the model via NIM, and one providing the NeMo RL development environment.
 
-### 1. Launch the container
+### 1. Start the NIM model server
+
+On the remote machine, pull and run the Nemotron NIM container:
+
+```bash
+docker run -it --rm \
+  --name=nemotron-3-nano-30b-a3b \
+  --runtime=nvidia \
+  --gpus '"device=0"' \
+  --shm-size=16GB \
+  -e NGC_API_KEY="$NGC_CLI_API_KEY" \
+  -e HF_TOKEN="$HF_TOKEN" \
+  -e NIM_MODEL_PROFILE="vllm-bf16-tp1-pp1-6303b8767cbc4d12ace1473dfaee17f021c6fd7784f7da8f14a85f285ed546f6" \
+  -v "$LOCAL_NIM_CACHE:/opt/nim/.cache" \
+  -u "$(id -u)" \
+  -p 8000:8000 \
+  nvcr.io/nim/nvidia/nemotron-3-nano:1
+```
+
+### 2. Launch the NeMo RL development container
 
 ```bash
 docker run --rm -it \
@@ -179,9 +198,30 @@ docker run --rm -it \
   nvcr.io/nvidia/nemo-rl:v0.5.0
 ```
 
-### 2. Activate the virtual environment and install dependencies
+### 3. Attach VS Code or Cursor to the container
 
-Once inside the container:
+Open VS Code or Cursor and attach to the running NeMo RL container using the **Dev Containers** extension (Remote - Containers). Once attached, open the `/workspace` folder.
+
+### 4. Copy the model cache into the development container
+
+Once inside the container, get its hostname (which is also its container ID):
+
+```bash
+hostname
+```
+
+Then from the **host machine**, create the cache directory and copy the model weights:
+
+```bash
+docker exec <container-id> mkdir -p /opt/nim/.cache/
+docker cp /home/nvidia/.cache/nim/nemotron-3-nano-30b-a3b/. <container-id>:/opt/nim/.cache/
+```
+
+Replace `<container-id>` with the value returned by `hostname` inside the container.
+
+### 5. Activate the virtual environment and install dependencies
+
+Inside the NeMo RL container:
 
 ```bash
 source /opt/nemo_rl_venv/bin/activate
@@ -202,7 +242,7 @@ python -m pip install \
   requests
 ```
 
-### 3. Validate imports
+### 6. Validate imports
 
 ```bash
 python -m src.main --check-imports
