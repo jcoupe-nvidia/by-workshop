@@ -28,7 +28,7 @@ A backward-compatible run_agent() delegates to run_agent_episode() and
 converts the Episode to an AgentTrace via _episode_to_trace().
 
 Model adapter contract:
-    - POST to http://0.0.0.0:8000/v1/chat/completions
+    - POST to http://172.17.0.1:8000/v1/chat/completions (or MODEL_ENDPOINT env var)
     - model: "nvidia/nemotron-3-nano"
     - OpenAI-style messages list
     - Returns assistant message content as a string
@@ -36,6 +36,7 @@ Model adapter contract:
 from __future__ import annotations
 
 import json
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -71,10 +72,24 @@ from src.rollouts.trace_types import (
 
 # -- Configuration ---------------------------------------------------------
 
-MODEL_ENDPOINT = "http://0.0.0.0:8000/v1/chat/completions"
+def _default_model_endpoint() -> str:
+    """Resolve the model endpoint, preferring an env override.
+
+    Inside a Docker container 0.0.0.0 refers to the container itself, but the
+    model server typically runs on the Docker host.  We default to the standard
+    Docker host-gateway address (172.17.0.1) and allow an env-var override for
+    other network topologies.
+    """
+    return os.environ.get(
+        "MODEL_ENDPOINT",
+        "http://172.17.0.1:8000/v1/chat/completions",
+    )
+
+
+MODEL_ENDPOINT = _default_model_endpoint()
 MODEL_NAME = "nvidia/nemotron-3-nano"
 MAX_ITERATIONS = 15  # hard stop to prevent runaway loops
-DEFAULT_MAX_TOKENS = 1024
+DEFAULT_MAX_TOKENS = 4096
 REQUEST_TIMEOUT = 60  # seconds
 
 # -- Backward-compatible trace data structures -----------------------------
@@ -153,7 +168,8 @@ def call_model(
     if not choices:
         raise ValueError(f"No choices in model response: {data}")
 
-    content = choices[0].get("message", {}).get("content", "")
+    msg = choices[0].get("message", {})
+    content = msg.get("content") or msg.get("reasoning_content") or ""
     if not content:
         raise ValueError(f"Empty content in model response: {choices[0]}")
 
@@ -212,6 +228,13 @@ def _episode_loop_core(
         try:
             raw_response = call_model_fn(messages)
             recorder.increment_model_calls()
+        except ValueError as e:
+            # Empty / malformed model response — treat as invalid output so
+            # the fallback pipeline can handle it instead of killing the loop.
+            raw_response = ""
+            recorder.increment_model_calls()
+            if verbose:
+                print(f"  Model returned unusable response: {e}")
         except Exception as e:
             error_msg = f"Model call failed: {e}"
             recorder.record_terminal("error", error_message=error_msg)
@@ -598,6 +621,26 @@ def run_agent_episode_nat(
         verbose=verbose,
         label="NAT agent episode",
     )
+
+
+def run_agent_nat(
+    order_id: str,
+    max_iterations: int = MAX_ITERATIONS,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+    temperature: float = 0.1,
+    verbose: bool = True,
+) -> AgentTrace:
+    """Execute the NAT-backed agent loop and return a backward-compatible AgentTrace.
+
+    Mirrors run_agent() but delegates to run_agent_episode_nat() so that tool
+    dispatch goes through a NAT FunctionGroup and model calls use NIMModelConfig.
+    """
+    start_time = time.time()
+    episode = run_agent_episode_nat(
+        order_id, max_iterations=max_iterations, max_tokens=max_tokens,
+        temperature=temperature, verbose=verbose,
+    )
+    return _episode_to_trace(episode, order_id, start_time)
 
 
 # -- Trace inspection helpers ----------------------------------------------

@@ -242,10 +242,17 @@ python -m pip install \
   "openai<3" \
   "jupyterlab<5" \
   "ipykernel<8" \
+  ipywidgets \
   "nvidia-nat" \
   "nemo-gym==0.2.0" \
   nest_asyncio \
   requests
+```
+
+Register the venv as a Jupyter kernel so it appears in the notebook kernel picker:
+
+```bash
+python -m ipykernel install --user --name nemo_rl_venv --display-name "nemo_rl_venv"
 ```
 
 ### 6. Validate imports
@@ -296,8 +303,8 @@ python -m src.main --rollout --nemo-rl-export artifacts/nemo_rl_datums.jsonl
 
 The live agent loop expects a local OpenAI-compatible endpoint:
 
-- base URL: `http://0.0.0.0:8000/v1`
-- chat completions URL: `http://0.0.0.0:8000/v1/chat/completions`
+- base URL: `http://172.17.0.1:8000/v1` (from inside the container; `http://0.0.0.0:8000/v1` on the host)
+- chat completions URL: `http://172.17.0.1:8000/v1/chat/completions`
 - model: `nvidia/nemotron-3-nano`
 
 Use `documents/llm-access.md` for the smoke test request and cache mapping.

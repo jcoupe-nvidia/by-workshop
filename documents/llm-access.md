@@ -4,9 +4,17 @@ This repository can reach a locally deployed OpenAI-compatible chat endpoint on 
 
 ## Endpoint
 
-- Base URL: `http://0.0.0.0:8000/v1`
-- Chat completions URL: `http://0.0.0.0:8000/v1/chat/completions`
+The model server runs on the Docker **host**, not inside the `nemo-rl` container.
+From inside the container use the host-gateway address; from the host use `0.0.0.0`.
+
+| Context | Base URL |
+|---------|----------|
+| Host machine | `http://0.0.0.0:8000/v1` |
+| Inside container (default) | `http://172.17.0.1:8000/v1` |
+
+- Chat completions URL (container): `http://172.17.0.1:8000/v1/chat/completions`
 - Model name: `nvidia/nemotron-3-nano`
+- Override: set the `MODEL_ENDPOINT` environment variable to use a different address.
 
 ## Smoke Test
 
@@ -14,7 +22,7 @@ Use this request to verify the local model is reachable:
 
 ```bash
 curl -X 'POST' \
-  'http://0.0.0.0:8000/v1/chat/completions' \
+  'http://172.17.0.1:8000/v1/chat/completions' \
   -H 'accept: application/json' \
   -H 'Content-Type: application/json' \
   -d '{
@@ -28,7 +36,7 @@ curl -X 'POST' \
 
 Any model adapter in this repo should:
 
-- send `POST` requests to `http://0.0.0.0:8000/v1/chat/completions`
+- send `POST` requests to `http://172.17.0.1:8000/v1/chat/completions` (inside the container)
 - use the model id `nvidia/nemotron-3-nano`
 - send OpenAI-style `messages`
 - treat the server as a local dependency running on port `8000`

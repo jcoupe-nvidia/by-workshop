@@ -17,15 +17,17 @@ Does NOT own:
 """
 from __future__ import annotations
 
+import os
+
 import requests
 
 from nat.llm.nim_llm import NIMModelConfig
 
 
-# Defaults from documents/llm-access.md
-_DEFAULT_BASE_URL = "http://0.0.0.0:8000/v1"
+# Defaults from documents/llm-access.md (host-gateway address for container use)
+_DEFAULT_BASE_URL = os.environ.get("MODEL_BASE_URL", "http://172.17.0.1:8000/v1")
 _DEFAULT_MODEL_NAME = "nvidia/nemotron-3-nano"
-_DEFAULT_MAX_TOKENS = 1024
+_DEFAULT_MAX_TOKENS = 4096
 _DEFAULT_TEMPERATURE = 0.1
 _REQUEST_TIMEOUT = 60
 
@@ -101,7 +103,8 @@ def call_model_nim(
     if not choices:
         raise ValueError(f"No choices in model response: {data}")
 
-    content = choices[0].get("message", {}).get("content", "")
+    msg = choices[0].get("message", {})
+    content = msg.get("content") or msg.get("reasoning_content") or ""
     if not content:
         raise ValueError(f"Empty content in model response: {choices[0]}")
 
