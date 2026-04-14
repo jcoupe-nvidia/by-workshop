@@ -246,7 +246,8 @@ python -m pip install \
   "nvidia-nat" \
   "nemo-gym==0.2.0" \
   nest_asyncio \
-  requests
+  requests \
+  nbconvert
 ```
 
 Register the venv as a Jupyter kernel so it appears in the notebook kernel picker:

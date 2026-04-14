@@ -29,6 +29,7 @@ Repair-vs-reject policy:
         - fix minor JSON syntax errors (trailing commas, single quotes)
         - fill default values for optional missing fields ("thought")
         - correct close-match tool names (edit distance <= 2)
+        - wrap flat final answers ({action, rationale, ...} -> {final_answer: {...}})
     REJECT when the intent is ambiguous or the error is structural:
         - no JSON object found at all
         - missing "tool_call" and "final_answer" entirely
@@ -363,6 +364,15 @@ def try_repair(
                 parsed["thought"] = thought_value
                 repairs.append("moved_thought_from_arguments")
             repairs.append("wrapped_flat_tool_call")
+        elif "action" in parsed and "rationale" in parsed:
+            # Flat final answer: the model put answer fields at the top level
+            # instead of nesting them under "final_answer".
+            thought_value = parsed.pop("thought", None)
+            wrapped = {"final_answer": parsed}
+            if thought_value is not None:
+                wrapped["thought"] = thought_value
+            parsed = wrapped
+            repairs.append("wrapped_flat_final_answer")
         else:
             return FallbackResult(
                 action=FallbackAction.REJECTED,

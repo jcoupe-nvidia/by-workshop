@@ -289,12 +289,35 @@ def score_recovery_options(
 @register_tool(
     name="recommend_action",
     params={"context": "dict"},
-    description="Produce a final recommendation based on scored recovery options and order context.",
+    description=(
+        "Produce a final recommendation based on scored recovery options and order context. "
+        "The context dict must include 'best_option' (the top-ranked option dict from "
+        "score_recovery_options, with at least 'description', 'lead_days', 'total_cost', "
+        "and 'scores'), 'order' (the original order dict with 'committed_date'), and "
+        "optionally 'objective' (the optimization objective string)."
+    ),
 )
 def recommend_action(context: dict[str, Any]) -> dict[str, Any]:
-    best = context.get("best_option")
-    order = context.get("order", {})
-    committed_date = order.get("committed_date", "unknown")
+    _BEST_OPTION_ALIASES = [
+        "best_option", "chosen_option", "selected_option", "option", "top_option",
+    ]
+    best = None
+    for key in _BEST_OPTION_ALIASES:
+        if key in context and isinstance(context[key], dict):
+            best = context[key]
+            break
+
+    _ORDER_ALIASES = ["order", "order_details", "order_info"]
+    order = {}
+    for key in _ORDER_ALIASES:
+        if key in context and isinstance(context[key], dict):
+            order = context[key]
+            break
+
+    if not order:
+        committed_date = context.get("committed_date", "unknown")
+    else:
+        committed_date = order.get("committed_date", "unknown")
 
     if not best:
         return {
